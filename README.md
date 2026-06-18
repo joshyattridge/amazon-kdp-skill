@@ -1,93 +1,97 @@
 # Amazon KDP Skill
 
-Cursor / Claude agent skill for **full Amazon Kindle Direct Publishing (KDP) automation**: royalty reports, book metadata sync, metadata/pricing/content updates, and catalog audits. The agent runs all commands; the user only completes Amazon sign-in (MFA) in the browser when needed.
+[![skills.sh](https://skills.sh/b/joshyattridge/amazon-kdp-skill)](https://skills.sh/joshyattridge/amazon-kdp-skill)
 
-Amazon does not expose a public API for author account metadata or backend keywords. This repo uses **Playwright + a saved browser session** to interact with KDP the same way the web UI does. Every KDP request is spaced by `KDP_REQUEST_DELAY_MS` (default 4 seconds) to avoid rate limits.
+An agent skill for **Amazon Kindle Direct Publishing (KDP)** — royalty reports, book metadata, pricing, content uploads, and catalog audits. Works with Cursor, Claude Code, and other agents that support the [Agent Skills](https://agentskills.io) format.
 
-## Install
+Tell your agent what you want in plain English. The skill handles setup, server, and commands — you only sign in to Amazon when needed.
 
-```bash
-git clone <your-repo-url> amazon-kdp-skill
-cd amazon-kdp-skill
-npm install
-cp .env.example .env
-```
+## Why use this?
 
-## Run the sync server
+Amazon has **no public API** for author account data — no backend keywords, no bulk metadata export, no programmatic pricing updates. KDP is a web UI only.
 
-```bash
-npm run server:start
-# → http://localhost:3001
-```
+This skill fills that gap. A local Playwright server drives KDP the same way you would in a browser, with throttled requests to avoid rate limits. Your agent can:
 
-## Connect Amazon
+- Download and parse royalty reports
+- Sync your full catalog — titles, keywords, categories, pricing, ASINs
+- Audit metadata for SEO gaps (missing keywords, short descriptions, etc.)
+- Update listings, prices, KDP Select, and content files
+- Run the full publish wizard from draft to live
 
-```bash
-npm run login
-# Sign in via the Chromium window, then:
-npm run status
-```
+Everything runs on your machine. Session cookies stay in `.kdp-session/` and are never sent anywhere else.
 
-## Install as Cursor skills
+## Quick start
 
 ```bash
-SKILLS=~/.cursor/skills
-REPO="$(pwd)"
-ln -sf "$REPO/SKILL.md" "$SKILLS/amazon-kdp/SKILL.md"
-for skill in connect-session account-info download-reports parse-reports sync-metadata export-metadata analyze-metadata update-metadata update-pricing upload-content publish-book; do
-  ln -sf "$REPO/skills/$skill" "$SKILLS/amazon-kdp-$skill"
-done
+npx skills add joshyattridge/amazon-kdp-skill
 ```
 
-## Commands
+Then ask your agent things like:
 
-### Read
+- *"Download my lifetime royalty report and summarize it."*
+- *"Sync all my book metadata and export to Excel."*
+- *"Audit my catalog for keyword gaps."*
+- *"Dry-run a price update on my paperback."*
 
-| Command | Action |
-|---------|--------|
-| `npm run status` | Check session |
-| `npm run account:info` | Account + catalog size |
-| `npm run bookshelf:list` | Fast title/format list |
-| `npm run catalog:get` | All titles + ASINs |
-| `npm run download:report` | Lifetime royalties `.xlsx` |
-| `npm run parse:report -- file.xlsx` | Summarize royalty report |
-| `npm run sync:metadata` | Full metadata scrape → cache |
-| `npm run sync:book -- ID format` | Refresh one book |
-| `npm run metadata:get` | Print cached JSON |
-| `npm run metadata:export` | Cache → Excel |
-| `npm run metadata:analyze` | Keyword/category audit |
+## What it covers
 
-### Write
+| Area | Examples |
+|------|----------|
+| **Session** | Sign in, check connection, reconnect after expiry |
+| **Reports** | Download lifetime or date-range royalty `.xlsx`, parse to JSON |
+| **Metadata** | Full Bookshelf scrape, single-book refresh, export to Excel |
+| **Analysis** | Keyword gaps, missing categories, duplicate keywords |
+| **Updates** | Title, subtitle, description, keywords, author, categories |
+| **Pricing** | List price, territory prices, KDP Select, royalty plan |
+| **Content** | Upload interior/cover PDFs, assign free ISBN |
+| **Publishing** | Create draft, run full wizard, publish (dry-run by default) |
+| **Account** | Catalog size, vendor code, title/ASIN listing |
 
-| Command | Action |
-|---------|--------|
-| `npm run update:metadata -- file.json` | Push details changes |
-| `npm run publish:book -- spec.json` | Full wizard (dry-run default) |
-| `npm run title:create -- paperback` | Start new draft |
-| `npm run title:delete -- ID format` | Delete draft |
-| `curl POST /api/kdp/pricing/update` | Update prices / KDP Select |
-| `curl POST /api/kdp/content/upload` | Upload interior/cover PDF |
+Write operations default to **dry-run** — the agent verifies before pushing live changes.
 
-Always dry-run writes first. See sub-skills in `skills/` for full API shapes.
+See `skills/` for task-specific agent instructions and `references/` for API shapes and troubleshooting.
+
+## How it works
+
+```
+You  →  Agent (Cursor / Claude)  →  npm scripts / REST API  →  Playwright  →  KDP
+                                              ↓
+                                    .kdp-session/ (local cookies + cache)
+```
+
+- **Setup:** The skill installs dependencies, starts the local server, and manages the session
+- **Server:** Express on `http://localhost:3001`
+- **Throttling:** 4s delay between KDP requests (configurable via `.env`)
+- **Cache:** Scraped metadata stored locally in `.kdp-session/`
+
+## Contributing
+
+The goal is to cover **every KDP workflow an author or publisher would automate** — reports, metadata, pricing, content, categories, publishing, account management, and anything else KDP exposes through its UI.
+
+If a use case is missing or broken, please open an issue or submit a PR. Useful contributions include:
+
+- New sub-skills or API endpoints for uncovered KDP flows
+- Bug fixes for UI changes Amazon makes to KDP
+- Better error handling, docs, or test coverage
+- Real-world examples in `examples/`
+
+Check `references/troubleshooting.md` before reporting browser automation failures — KDP rate-limits aggressively and UI selectors can drift.
+
+## Security
+
+- **Never commit** `.kdp-session/` — it contains Amazon session cookies
+- **Never commit** `.env`, downloaded `.xlsx` files, or `output/`
+- All automation is local; no data is sent to third parties
 
 ## Repo layout
 
 ```
 amazon-kdp-skill/
-├── SKILL.md                 # Main agent skill (router)
-├── skills/                  # Sub-skills by task (12 skills)
-├── server/                  # Express + Playwright automation
-├── lib/                     # Royalty xlsx parser
-├── scripts/                 # CLI wrappers
-├── references/              # API + troubleshooting docs
-└── output/                  # Downloaded reports (gitignored)
+├── SKILL.md           # Main agent skill (router)
+├── skills/            # Sub-skills by task
+├── server/            # Express + Playwright automation
+├── lib/               # Royalty xlsx parser
+├── scripts/           # CLI wrappers
+├── references/        # API docs + troubleshooting
+└── examples/          # Sample publish/update specs
 ```
-
-## Security
-
-- `.kdp-session/` contains Amazon cookies — **never commit or share**
-- Runs locally only; no data sent to third parties
-
-## License
-
-Private / your choice — add LICENSE if open-sourcing.
