@@ -1,0 +1,16 @@
+{
+  "dryRun": true,
+  "updates": [
+    {
+      "titleId": "REPLACE_WITH_TITLE_ID",
+      "format": "paperback",
+      "changes": {
+        "keywords": [
+          "example keyword one",
+          "example keyword two"
+        ],
+        "description": "First paragraph of the new description.\n\nSecond paragraph with more detail."
+      }
+    }
+  ]
+}

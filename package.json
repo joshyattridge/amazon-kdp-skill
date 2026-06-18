@@ -1,0 +1,45 @@
+{
+  "name": "amazon-kdp-skill",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cursor/Claude skill + Playwright automation for Amazon KDP reports and book metadata",
+  "type": "module",
+  "scripts": {
+    "server": "tsx watch server/src/index.ts",
+    "server:start": "tsx server/src/index.ts",
+    "postinstall": "playwright install chromium",
+    "login": "node scripts/kdp-cli.mjs login",
+    "status": "node scripts/kdp-cli.mjs status",
+    "download:report": "node scripts/kdp-cli.mjs download-report",
+    "sync:metadata": "node scripts/kdp-cli.mjs sync-metadata",
+    "metadata:get": "node scripts/kdp-cli.mjs metadata-get",
+    "metadata:export": "node scripts/export-metadata-xlsx.mjs",
+    "parse:report": "tsx scripts/parse-report.ts",
+    "account:info": "node scripts/kdp-cli.mjs account",
+    "bookshelf:list": "node scripts/kdp-cli.mjs bookshelf",
+    "catalog:get": "node scripts/kdp-cli.mjs catalog",
+    "metadata:analyze": "node scripts/kdp-cli.mjs metadata-analyze",
+    "sync:book": "node scripts/kdp-cli.mjs sync-book",
+    "update:metadata": "node scripts/update-kdp-metadata.mjs",
+    "publish:book": "node scripts/publish-book.mjs",
+    "title:create": "node scripts/kdp-cli.mjs title-create",
+    "title:delete": "node scripts/kdp-cli.mjs title-delete",
+    "title:unpublish": "node scripts/kdp-cli.mjs title-unpublish",
+    "discover:apis": "node scripts/discover-kdp-apis.mjs",
+    "test:all": "node scripts/test-all.mjs",
+    "test:throttle": "tsx scripts/test-throttle.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "playwright": "^1.55.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.12.2",
+    "tsx": "^4.20.5",
+    "typescript": "~6.0.2"
+  }
+}

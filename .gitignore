@@ -1,0 +1,9 @@
+node_modules/
+.kdp-session/
+*.xlsx
+!scripts/update-kdp-metadata.example.json
+output/
+.env
+.DS_Store
+scripts/spreadsheet-apply-results.json
+scripts/spreadsheet-batch-updates.json

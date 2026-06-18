@@ -1,0 +1,27 @@
+{
+  "format": "paperback",
+  "create": true,
+  "dryRun": true,
+  "publish": false,
+  "details": {
+    "title": "My New Book Title",
+    "subtitle": "Optional subtitle",
+    "description": "Plain-text description.\n\nSecond paragraph.",
+    "language": "English",
+    "isAdultContent": false,
+    "primaryAuthor": { "firstName": "Jane", "lastName": "Author" },
+    "keywords": ["keyword one", "keyword two"]
+  },
+  "categories": [
+    { "browseNodeId": "3398" },
+    { "path": ["Humor & Entertainment", "Humor"] }
+  ],
+  "content": {
+    "interiorPath": "/absolute/path/to/manuscript.pdf",
+    "coverPath": "/absolute/path/to/cover.pdf"
+  },
+  "pricing": {
+    "listPriceUsd": "9.99",
+    "territory": "worldwide"
+  }
+}
