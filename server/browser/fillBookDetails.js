@@ -139,8 +139,24 @@
         if (el) {
           el.value = html
           dispatchInput(el)
-          return true
+          return el.value.length > 0
         }
+      }
+      return false
+    }
+
+    const setViaSourceMode = () => {
+      const sourceBtn = document.getElementById('cke_18')
+      if (sourceBtn) sourceBtn.click()
+      const sourceTextarea = document.querySelector(
+        '#cke_1_contents textarea, #cke_1_contents > textarea, textarea.cke_source',
+      )
+      if (sourceTextarea) {
+        sourceTextarea.value = html
+        dispatchInput(sourceTextarea)
+        syncHiddenDescription()
+        if (sourceBtn) sourceBtn.click()
+        return true
       }
       return false
     }
@@ -152,33 +168,30 @@
       for (const key of keys) {
         const inst = CK.instances[key]
         if (!inst?.setData) continue
-        const el = inst.element?.$ 
+        const el = inst.element?.$
         const name = el?.getAttribute?.('name') || el?.name || ''
         const isDescription =
           fields.description.some((n) => name === n) ||
           /description/i.test(key) ||
           /description/i.test(name)
         if (isDescription || keys.length === 1) {
-          inst.setData(html, {
-            callback: () => {
-              syncHiddenDescription()
-              inst.updateElement()
-            },
-          })
+          inst.setData(html)
           inst.updateElement()
+          syncHiddenDescription()
           return true
         }
       }
       const first = CK.instances[keys[0]]
       if (first?.setData) {
-        first.setData(html, { callback: () => first.updateElement() })
+        first.setData(html)
         first.updateElement()
+        syncHiddenDescription()
         return true
       }
       return false
     }
 
-    ok = setViaCke() || syncHiddenDescription()
+    ok = setViaSourceMode() || setViaCke() || syncHiddenDescription()
 
     if (!ok) {
       const iframe = document.querySelector('iframe[id*="description"], iframe.cke_wysiwyg_frame')

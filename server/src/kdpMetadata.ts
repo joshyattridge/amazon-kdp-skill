@@ -104,25 +104,44 @@ type BookshelfScan = {
   pagesScanned: number
 }
 
-export async function withKdpPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
-  return withKdpPages(async ({ action }) => fn(action))
+export type KdpBrowserOptions = {
+  /** Default true. Set false for content uploads (KDP often rejects headless file uploads). */
+  headless?: boolean
+  viewport?: { width: number; height: number }
+}
+
+export async function withKdpPage<T>(
+  fn: (page: Page) => Promise<T>,
+  options: KdpBrowserOptions = {},
+): Promise<T> {
+  return withKdpPages(async ({ action }) => fn(action), options)
 }
 
 /** Separate pages avoid setContent/HTML parse conflicting with live navigation. */
 export async function withKdpPages<T>(
   fn: (pages: { action: Page; parse: Page }) => Promise<T>,
+  options: KdpBrowserOptions = {},
 ): Promise<T> {
   if (!(await sessionExists())) {
     throw new KdpAuthError()
   }
 
+  const headless = options.headless ?? process.env.KDP_HEADLESS === 'true'
+  const viewport = options.viewport ?? { width: 1920, height: 1080 }
+
   const browser = await chromium.launch({
-    headless: true,
-    args: ['--disable-blink-features=AutomationControlled'],
+    headless,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      ...(headless ? [] : ['--start-maximized']),
+    ],
   })
 
   try {
-    const context = await browser.newContext({ storageState: sessionFilePath() })
+    const context = await browser.newContext({
+      storageState: sessionFilePath(),
+      viewport,
+    })
     const action = await context.newPage()
     const parse = await context.newPage()
     return await fn({ action, parse })

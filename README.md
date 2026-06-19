@@ -63,6 +63,7 @@ You  →  Agent (Cursor / Claude)  →  npm scripts / REST API  →  Playwright 
 - **Server:** Express on `http://localhost:3001`
 - **Throttling:** 4s delay between KDP requests (configurable via `.env`)
 - **Cache:** Scraped metadata stored locally in `.kdp-session/`
+- **Recovery learnings:** Successful KDP error workarounds stored in `.kdp-session/recovery-learnings.json`
 
 ## Contributing
 

@@ -244,8 +244,8 @@ export async function updateCategoriesOnPage(
       if (options.language) {
         await ensureLanguageSelected(page, format, options.language)
       }
-      const { setReleaseNow } = await import('./kdpCreateTitle.js')
-      await setReleaseNow(page)
+      const { ensureReleaseDateScheduled } = await import('./kdpCreateTitle.js')
+      await ensureReleaseDateScheduled(page)
       await clickKdpActionButton(page, {
         buttonIds: ['save-announce', 'save-and-continue-announce'],
         labels: ['Save as Draft', 'Save and Continue', 'Save'],

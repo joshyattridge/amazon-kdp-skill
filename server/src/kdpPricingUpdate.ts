@@ -11,7 +11,8 @@ import {
   type KdpBookMetadata,
   patchBookInCache,
 } from './metadataStore.js'
-import { clickKdpActionButton } from './kdpUiHelpers.js'
+import { clickKdpActionButton, dismissKdpOverlays } from './kdpUiHelpers.js'
+import { gatherBlockers, recoverFromBlockers, type RecoveryAttempt } from './kdpRecovery.js'
 
 const FILL_PRICING_FN = fs.readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), '../browser/fillBookPricing.js'),
@@ -39,6 +40,7 @@ export type KdpPricingUpdateResult = {
   saved: boolean
   errors: string[]
   book: KdpBookMetadata | null
+  recoveryLog?: RecoveryAttempt[]
 }
 
 type FillResult = { filled: string[]; skipped: string[] }
@@ -70,7 +72,8 @@ async function fillPricingPage(
 
 async function clickSaveOnPricingPage(page: Page): Promise<void> {
   await clickKdpActionButton(page, {
-    labels: ['Save and Continue', 'Save as Draft', 'Save and Publish', 'Save'],
+    buttonIds: ['save-announce', 'save-and-continue-announce'],
+    labels: ['Save as Draft', 'Save and Continue', 'Save and Publish', 'Save'],
   })
 }
 
@@ -169,6 +172,25 @@ export async function updateBookPricingOnPage(
 
   const fillResult = await fillPricingPage(page, format, changes)
 
+  if (changes.listPriceUsd !== undefined) {
+    const usd = page.locator('#price-input-usd').first()
+    if (await usd.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await usd.scrollIntoViewIfNeeded().catch(() => {})
+      await usd.click({ timeout: 5000 }).catch(() => {})
+      await usd.fill(changes.listPriceUsd)
+      await page.waitForTimeout(300)
+      if (!fillResult.filled.includes('listPriceUsd')) fillResult.filled.push('listPriceUsd')
+      fillResult.skipped = fillResult.skipped.filter((s) => s !== 'listPriceUsd')
+    }
+  }
+
+  if (changes.territory === 'worldwide') {
+    const worldwide = page.locator('#worldwide-rights')
+    if (await worldwide.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await worldwide.check({ timeout: 5000 }).catch(() => {})
+    }
+  }
+
   if (fillResult.skipped.includes('listPriceUsd') && changes.listPriceUsd !== undefined) {
     await page.evaluate(
       `(price) => {
@@ -209,17 +231,72 @@ export async function updateBookPricingOnPage(
     }
   }
 
-  await clickSaveOnPricingPage(page)
+  await dismissKdpOverlays(page)
 
-  const parsePage = await page.context().newPage()
+  const recoveryLog: RecoveryAttempt[] = []
+  let onPageUsd = ''
   let refreshed: KdpBookMetadata | null = null
-  try {
-    refreshed = await fetchBookMetadata(page, parsePage, { titleId, format })
-  } finally {
-    await parsePage.close().catch(() => {})
+  let saved = false
+
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    await dismissKdpOverlays(page)
+    await clickSaveOnPricingPage(page)
+    await page.waitForTimeout(5000)
+
+    onPageUsd = (await page.evaluate(`(() => {
+      return (
+        document.getElementById('price-input-usd')?.value ||
+        document.querySelector('input[name="data[print_book][list_price][USD][amount]"]')?.value ||
+        document.querySelector('input[name="data[print_book][list_price][US][amount]"]')?.value ||
+        ''
+      )
+    })()`)) as string
+
+    if (
+      changes.listPriceUsd !== undefined &&
+      onPageUsd &&
+      onPageUsd.replace(',', '.') === changes.listPriceUsd.replace(',', '.')
+    ) {
+      saved = true
+      break
+    }
+
+    const parsePage = await page.context().newPage()
+    try {
+      refreshed = await fetchBookMetadata(page, parsePage, { titleId, format })
+    } finally {
+      await parsePage.close().catch(() => {})
+    }
+
+    if (refreshed && pricingApplied(refreshed, changes)) {
+      saved = true
+      break
+    }
+
+    if (attempt < 4) {
+      const blockers = await gatherBlockers(page, ['Pricing changes were not verified after save.'])
+      const recovery = await recoverFromBlockers(page, blockers, { step: 'pricing' })
+      recovery.attempt = attempt
+      recoveryLog.push(recovery)
+      await page.waitForTimeout(1500)
+    }
   }
 
-  if (refreshed && pricingApplied(refreshed, changes)) {
+  if (saved && onPageUsd) {
+    return {
+      titleId,
+      format,
+      dryRun: false,
+      filled: fillResult.filled,
+      skipped: fillResult.skipped,
+      saved: true,
+      errors: [],
+      book: { titleId, format, listPriceUsd: onPageUsd } as KdpBookMetadata,
+      recoveryLog: recoveryLog.length > 0 ? recoveryLog : undefined,
+    }
+  }
+
+  if (saved && refreshed && pricingApplied(refreshed, changes)) {
     await patchBookInCache(refreshed)
     return {
       titleId,
@@ -230,6 +307,7 @@ export async function updateBookPricingOnPage(
       saved: true,
       errors: [],
       book: refreshed,
+      recoveryLog: recoveryLog.length > 0 ? recoveryLog : undefined,
     }
   }
 
@@ -242,6 +320,7 @@ export async function updateBookPricingOnPage(
     saved: false,
     errors: ['Pricing changes were not verified after save.'],
     book: refreshed,
+    recoveryLog: recoveryLog.length > 0 ? recoveryLog : undefined,
   }
 }
 
@@ -256,8 +335,9 @@ export async function updateBookPricing(
 
   const dryRun = options.dryRun ?? false
 
-  return withKdpPage(async (page) =>
-    updateBookPricingOnPage(page, titleId, format, changes, dryRun),
+  return withKdpPage(
+    async (page) => updateBookPricingOnPage(page, titleId, format, changes, dryRun),
+    { headless: false },
   )
 }
 

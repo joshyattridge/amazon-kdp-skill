@@ -42,6 +42,32 @@ function isFailed(status: string): boolean {
   return /fail|error|reject/i.test(status.trim())
 }
 
+/** auto-kdp: expand "Upload a cover you already have (print-ready PDF)" before browse/upload. */
+export async function selectPdfCoverUploadOption(page: Page): Promise<void> {
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  await dismissKdpOverlays(page)
+  await page.evaluate(`(() => {
+    const sel =
+      '#data-print-book-publisher-cover-choice-accordion [data-a-accordion-row-name="UPLOAD"] a[data-action="a-accordion"]'
+    const el = document.querySelector(sel)
+    if (el) {
+      el.scrollIntoView({ block: 'center' })
+      el.click()
+    }
+  })()`)
+  await page.waitForTimeout(1500)
+}
+
+export async function waitForCoverUploadSuccessElement(
+  page: Page,
+  options: { timeoutMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 600_000
+  await page.waitForSelector('#data-print-book-publisher-cover-file-upload-success', {
+    timeout: timeoutMs,
+  })
+}
+
 export async function waitForContentFileStatus(
   page: Page,
   kind: 'manuscript' | 'cover',
@@ -71,33 +97,79 @@ export async function waitForContentFileStatus(
   return finalStatus
 }
 
+/** auto-kdp update-content.ts: Launch Previewer → approve on preview page → return to content. */
 export async function approveManuscriptIfNeeded(page: Page): Promise<boolean> {
+  await page.setViewportSize({ width: 1920, height: 1080 })
   await dismissKdpOverlays(page)
 
-  const previewBtn = page.locator('#print-preview-noconfirm-announce, #print-preview-announce').first()
-  if (await previewBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await previewBtn.click({ timeout: 10_000 }).catch(() => {})
-    await page.waitForTimeout(2000)
-    await dismissKdpOverlays(page)
-  }
+  const previewVisible = await page
+    .locator('#print-preview-noconfirm-announce, #print-preview-announce')
+    .first()
+    .isVisible({ timeout: 5000 })
+    .catch(() => false)
+  if (!previewVisible) return false
 
-  const approved = await page.evaluate(`(() => {
-    const patterns = [/approve/i, /accept/i, /looks good/i, /confirm/i]
+  const urlBefore = page.url()
+  await dismissKdpOverlays(page)
+  await clickKdpActionButton(page, {
+    buttonIds: ['print-preview-noconfirm-announce', 'print-preview-announce'],
+    labels: ['Launch Previewer', 'Preview book', 'Preview'],
+  }).catch(async () => {
+    await page.evaluate(`(() => {
+      const btn =
+        document.getElementById('print-preview-noconfirm-announce') ||
+        document.getElementById('print-preview-announce')
+      if (btn) btn.click()
+    })()`)
+  })
+
+  await page
+    .waitForURL(/print-preview|printpreview|previewer/i, { timeout: 900_000 })
+    .catch(() =>
+      page.waitForFunction(
+        `(before) => /print-preview|printpreview|previewer/i.test(window.location.href)`,
+        urlBefore,
+        { timeout: 900_000 },
+      ),
+    )
+  await page.waitForTimeout(5000)
+  await dismissKdpOverlays(page)
+
+  const approved = (await page.evaluate(`(() => {
+    const link = document.querySelector('#printpreview_approve_button_enabled a')
+    if (link) {
+      link.click()
+      return true
+    }
     for (const el of document.querySelectorAll('button, a.a-button-text, input[type="submit"]')) {
-      const text = (el.value || el.textContent || '').trim()
-      if (patterns.some((p) => p.test(text)) && !/preview/i.test(text)) {
+      const text = (el.value || el.textContent || '').replace(/\\s+/g, ' ').trim()
+      if (/^Approve$/i.test(text)) {
         el.click()
-        return text
+        return true
       }
     }
-    return null
+    return false
+  })()`)) as boolean
+
+  if (!approved) return false
+
+  await page
+    .waitForURL(/title-setup.*content|print-preview/, { timeout: 120_000 })
+    .catch(() => {})
+  await page.waitForSelector('#save-announce, #save-and-continue-announce', {
+    timeout: 120_000,
+  }).catch(() => {})
+  await page.waitForTimeout(2000)
+  await dismissKdpOverlays(page)
+
+  await page.evaluate(`(() => {
+    const cb =
+      document.querySelector('input[type="checkbox"][name*="generative"]') ||
+      document.querySelector('#generative-ai-content-checkbox')
+    if (cb && !cb.checked) cb.click()
   })()`)
 
-  if (approved) {
-    await page.waitForTimeout(2000)
-    return true
-  }
-  return false
+  return true
 }
 
 export async function waitForContentReadyForPricing(

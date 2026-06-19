@@ -99,8 +99,19 @@ Global rate limit (KDP_REQUEST_DELAY_MS between every request)
 | Unpublish live title | `POST /api/kdp/titles/unpublish` |
 | Delete draft | `POST /api/kdp/titles/delete` |
 | Archive title | `POST /api/kdp/titles/archive` |
+| Recovery learnings | `GET /api/kdp/recovery/learnings` |
 
 Always **dry-run one book** before batch writes. Never set `publish: true` without explicit user confirmation.
+
+## Automatic error recovery
+
+Write flows (details save, content upload, pricing, publish wizard) **retry with recovery** when KDP blocks progress:
+
+- Built-in playbook: dismiss modals, set release date, approve manuscript preview, select cover upload accordion, bypass Server Busy, wait for processing, etc.
+- **Learnings file**: `.kdp-session/recovery-learnings.json` — successful error→action pairs are ranked higher on future runs.
+- Publish API responses may include `recoveryLog` describing what was tried.
+
+If recovery exhausts retries, read `errors` and `recoveryLog`, then fix the underlying issue (e.g. invalid cover PDF dimensions).
 
 ## Rules for agents
 

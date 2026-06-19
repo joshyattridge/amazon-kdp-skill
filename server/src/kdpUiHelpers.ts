@@ -27,12 +27,21 @@ export async function dismissKdpOverlays(page: Page): Promise<void> {
   }
 
   await page.evaluate(`(() => {
-    for (const el of document.querySelectorAll('.a-modal-scroller, .a-popover')) {
-      el.click && el.click()
-    }
     for (const el of document.querySelectorAll('[data-action="a-popover-floating-close"]')) {
       el.click && el.click()
     }
+    for (const id of ['a-popover-lgtbox', 'uploading-interrupt-ack-announce']) {
+      const el = document.getElementById(id)
+      if (el) {
+        el.style.display = 'none'
+        el.style.pointerEvents = 'none'
+      }
+    }
+    for (const el of document.querySelectorAll('.a-popover, .a-modal, .a-modal-scroller, #a-popover-lgtbox')) {
+      el.style.pointerEvents = 'none'
+      el.style.display = 'none'
+    }
+    document.body.style.overflow = 'auto'
   })()`)
   await page.waitForTimeout(300)
 }
@@ -75,7 +84,7 @@ export async function clickKdpActionButton(
     const btn = page.getByRole('button', { name: new RegExp(`^${label}$`, 'i') }).first()
     if (await btn.isVisible({ timeout: 1500 }).catch(() => false)) {
       await btn.scrollIntoViewIfNeeded().catch(() => {})
-      await btn.click({ timeout: 15_000 })
+      await btn.click({ force: true, timeout: 15_000 })
       await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
       await page.waitForTimeout(1000)
       return label

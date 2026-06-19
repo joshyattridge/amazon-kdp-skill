@@ -30,6 +30,8 @@ npm run publish:book -- output/Book_Title.publish.json --live
 
 The wizard waits for KDP to process manuscript/cover (up to 10 min) before opening pricing. It does **not** click Publish unless `"publish": true` in the JSON.
 
+**Error recovery:** If KDP shows blockers (modals, release date, preview required, etc.), the server retries with automatic recoveries and saves what worked to `.kdp-session/recovery-learnings.json`. Check `recoveryLog` in the publish API response.
+
 ## Dry run (new paperback draft)
 
 ```bash

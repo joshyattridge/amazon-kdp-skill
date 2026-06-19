@@ -12,12 +12,15 @@ import {
   patchBookInCache,
 } from './metadataStore.js'
 import { clickKdpActionButton, dismissKdpOverlays } from './kdpUiHelpers.js'
+import { gatherBlockers, runWithRecovery, type RecoveryAttempt } from './kdpRecovery.js'
 import {
   approveManuscriptIfNeeded,
   isSuccess,
   readContentFileStatus,
   saveContentPage,
+  selectPdfCoverUploadOption,
   waitForContentFileStatus,
+  waitForCoverUploadSuccessElement,
 } from './kdpContentWait.js'
 
 const FILL_CONTENT_FN = fs.readFileSync(
@@ -86,6 +89,33 @@ async function clickSaveOnContentPage(page: Page): Promise<void> {
   await saveContentPage(page)
 }
 
+async function ensurePremiumColorSelected(page: Page): Promise<void> {
+  await page.evaluate(`(() => {
+    const premium = document.querySelector(
+      'input[name="data[print_book][ink_and_paper]"][value="COLOR_COLOR"]',
+    )
+    if (premium && !premium.checked) {
+      premium.checked = true
+      premium.dispatchEvent(new Event('change', { bubbles: true }))
+      premium.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+  })()`)
+  await page.waitForTimeout(1000)
+}
+
+async function clearFailedContentUploads(page: Page): Promise<void> {
+  await dismissKdpOverlays(page)
+  await page.evaluate(`(() => {
+    for (const el of document.querySelectorAll('a, button, span.a-button-text')) {
+      const text = (el.textContent || '').replace(/\\s+/g, ' ').trim()
+      if (/^(Remove file|Remove|Delete file|Delete)$/i.test(text)) {
+        el.click()
+      }
+    }
+  })()`)
+  await page.waitForTimeout(2500)
+}
+
 async function uploadInteriorFile(page: Page, filePath: string): Promise<void> {
   await revealContentUpload(page, 'interior')
   const input = page.locator('#data-print-book-publisher-interior-file-upload-AjaxInput')
@@ -95,15 +125,21 @@ async function uploadInteriorFile(page: Page, filePath: string): Promise<void> {
 }
 
 async function uploadCoverFile(page: Page, filePath: string): Promise<void> {
-  await dismissKdpOverlays(page)
-  await revealContentUpload(page, 'cover')
-  const coverInput = page.locator(
-    '#data-print-book-publisher-cover-pdf-only-file-upload-AjaxInput, #data-print-book-publisher-cover-file-upload-AjaxInput',
-  ).first()
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  await selectPdfCoverUploadOption(page)
+  for (let i = 0; i < 3; i++) {
+    await dismissKdpOverlays(page)
+    await page.waitForTimeout(500)
+  }
+
+  const coverInput = page.locator('#data-print-book-publisher-cover-file-upload-AjaxInput')
+  await coverInput.waitFor({ state: 'attached', timeout: 30_000 })
   await coverInput.setInputFiles(filePath)
-  await waitForUploadSuccess(page, path.basename(filePath))
-  await page.waitForTimeout(5000)
-  await waitForContentFileStatus(page, 'cover', { timeoutMs: 180_000 }).catch(() => {})
+
+  await waitForCoverUploadSuccessElement(page).catch(async () => {
+    await waitForUploadSuccess(page, path.basename(filePath))
+    await waitForContentFileStatus(page, 'cover', { timeoutMs: 600_000 })
+  })
 }
 
 function needsUpload(status: ContentFileStatus, kind: 'interior' | 'cover'): boolean {
@@ -137,29 +173,46 @@ async function revealContentUpload(page: Page, fileType: 'interior' | 'cover'): 
 }
 
 export async function assignFreeKdpIsbn(page: Page): Promise<string | null> {
+  await dismissKdpOverlays(page)
+
   const existing = await page.evaluate(
     () => (document.getElementById('print-isbn-free-isbn') as HTMLInputElement | null)?.value || null,
   )
   if (existing) return existing
 
-  const link = page.getByRole('link', { name: /Get a free KDP ISBN/i }).first()
-  if (await link.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await link.click({ timeout: 10_000 })
-    await page.waitForTimeout(2000)
+  try {
+    await clickKdpActionButton(page, {
+      buttonIds: ['free-print-isbn-btn-announce'],
+      labels: ['Get a free KDP ISBN'],
+    })
+  } catch {
+    await page.evaluate(`(() => {
+      const btn = document.getElementById('free-print-isbn-btn-announce')
+      if (btn) btn.click()
+      const freeRadio = document.getElementById('print-isbn')
+      if (freeRadio) {
+        freeRadio.checked = true
+        freeRadio.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+    })()`)
   }
+  await page.waitForTimeout(1500)
+  await dismissKdpOverlays(page)
 
-  await page.evaluate(() => {
-    const freeRadio = document.getElementById('print-isbn') as HTMLInputElement | null
-    if (freeRadio) {
-      freeRadio.checked = true
-      freeRadio.dispatchEvent(new Event('change', { bubbles: true }))
-    }
-    const btn = document.getElementById('free-isbn-confirm-button') as HTMLElement | null
-    if (btn) {
-      btn.scrollIntoView({ block: 'center' })
-      btn.click()
-    }
-  })
+  try {
+    await clickKdpActionButton(page, {
+      buttonIds: ['print-isbn-confirm-button-announce', 'free-isbn-confirm-button-announce'],
+      labels: ['Assign ISBN'],
+    })
+  } catch {
+    await page.evaluate(`(() => {
+      const btn =
+        document.getElementById('print-isbn-confirm-button-announce') ||
+        document.getElementById('free-isbn-confirm-button-announce')
+      if (btn) btn.click()
+    })()`)
+  }
+  await page.waitForTimeout(3000)
 
   for (let i = 0; i < 15; i++) {
     await page.waitForTimeout(2000)
@@ -195,12 +248,20 @@ export type CompletePrintContentSpec = {
   printSettings?: KdpPrintContentSettings
 }
 
-export async function completePrintContentOnPage(
+export type CompletePrintContentResult = {
+  interiorUploaded: boolean
+  coverUploaded: boolean
+  isbn: string | null
+  errors: string[]
+  recoveryLog?: RecoveryAttempt[]
+}
+
+async function completePrintContentOnce(
   page: Page,
   titleId: string,
   format: KdpBookFormat,
   spec: CompletePrintContentSpec,
-): Promise<{ interiorUploaded: boolean; coverUploaded: boolean; isbn: string | null; errors: string[] }> {
+): Promise<Omit<CompletePrintContentResult, 'recoveryLog'>> {
   const errors: string[] = []
 
   if (format !== 'paperback') {
@@ -209,32 +270,34 @@ export async function completePrintContentOnPage(
 
   await openContentPage(page, format, titleId)
 
+  let status = await readContentFileStatus(page)
+  if (/error|fail/i.test(status.manuscriptStatus) || /error|fail/i.test(status.coverStatus)) {
+    await clearFailedContentUploads(page)
+    status = await readContentFileStatus(page)
+  }
+
   const settings = { ...spec.printSettings, assignFreeIsbn: true }
   await fillPrintContentOnPage(page, settings)
+  await ensurePremiumColorSelected(page)
   await page.waitForTimeout(2000)
   await saveContentPage(page).catch(() => {})
 
-  let status = await readContentFileStatus(page)
+  status = await readContentFileStatus(page)
   const interiorName = spec.interiorPath
     ? path.basename(spec.interiorPath).replace(/\.[^.]+$/, '')
     : ''
   const coverName = spec.coverPath ? path.basename(spec.coverPath).replace(/\.[^.]+$/, '') : ''
 
-  if (spec.interiorPath && needsUpload(status, 'interior')) {
-    if (!fs.existsSync(spec.interiorPath)) {
-      throw new KdpClientError(`Interior file not found: ${spec.interiorPath}`)
-    }
-    try {
-      await uploadInteriorFile(page, spec.interiorPath)
-      status = await readContentFileStatus(page)
-      await saveContentPage(page).catch(() => {})
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : 'Interior upload failed.')
-    }
-  }
-
   const isbn = await assignFreeKdpIsbn(page)
   if (!isbn) errors.push('Could not assign free KDP ISBN.')
+  else await saveContentPage(page).catch(() => {})
+
+  status = await readContentFileStatus(page)
+  if (isSuccess(status.manuscriptStatus)) {
+    const preApproved = await approveManuscriptIfNeeded(page)
+    if (!preApproved) errors.push('Could not approve existing manuscript before cover upload.')
+    else await saveContentPage(page).catch(() => {})
+  }
 
   if (spec.coverPath && needsUpload(status, 'cover')) {
     if (!fs.existsSync(spec.coverPath)) {
@@ -249,7 +312,23 @@ export async function completePrintContentOnPage(
     }
   }
 
-  await approveManuscriptIfNeeded(page)
+  if (spec.interiorPath && needsUpload(status, 'interior')) {
+    if (!fs.existsSync(spec.interiorPath)) {
+      throw new KdpClientError(`Interior file not found: ${spec.interiorPath}`)
+    }
+    try {
+      await uploadInteriorFile(page, spec.interiorPath)
+      status = await readContentFileStatus(page)
+      await saveContentPage(page).catch(() => {})
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : 'Interior upload failed.')
+    }
+  }
+
+  const approved = await approveManuscriptIfNeeded(page)
+  if (!approved && !isSuccess(status.coverStatus)) {
+    errors.push('Could not launch previewer and approve manuscript.')
+  }
   await clickSaveOnContentPage(page)
 
   const parsePage = await page.context().newPage()
@@ -263,20 +342,51 @@ export async function completePrintContentOnPage(
 
   status = await readContentFileStatus(page)
 
+  const coverOk = isSuccess(status.coverStatus) || refreshed?.coverStatus === 'SUCCESS'
+  const interiorOk =
+    isSuccess(status.manuscriptStatus) || refreshed?.manuscriptStatus === 'SUCCESS'
+
   return {
     interiorUploaded: Boolean(
-      isSuccess(status.manuscriptStatus) ||
-        refreshed?.manuscriptStatus === 'SUCCESS' ||
+      !spec.interiorPath ||
+        interiorOk ||
         (interiorName && refreshed?.interiorFileName.includes(interiorName)),
     ),
-    coverUploaded: Boolean(
-      isSuccess(status.coverStatus) ||
-        refreshed?.coverStatus === 'SUCCESS' ||
-        (coverName && refreshed?.coverFileName.includes(coverName)),
-    ),
+    coverUploaded: Boolean(!spec.coverPath || coverOk),
     isbn: refreshed?.isbn || isbn,
     errors,
   }
+}
+
+export async function completePrintContentOnPage(
+  page: Page,
+  titleId: string,
+  format: KdpBookFormat,
+  spec: CompletePrintContentSpec,
+): Promise<CompletePrintContentResult> {
+  if (format !== 'paperback') {
+    throw new KdpClientError('completePrintContentOnPage supports paperback only.')
+  }
+
+  const { result, recoveryLog } = await runWithRecovery(
+    page,
+    { step: 'content' },
+    () => completePrintContentOnce(page, titleId, format, spec),
+    {
+      maxAttempts: 5,
+      verify: async (r) => {
+        const coverOk = !spec.coverPath || r.coverUploaded
+        const interiorOk = !spec.interiorPath || r.interiorUploaded
+        return coverOk && interiorOk
+      },
+      collectErrors: async (p, err) => {
+        const extra = err instanceof Error ? [err.message] : err ? [String(err)] : []
+        return gatherBlockers(p, extra)
+      },
+    },
+  )
+
+  return { ...result, recoveryLog: recoveryLog.length > 0 ? recoveryLog : undefined }
 }
 
 export async function fillPrintContentOnPage(
@@ -385,8 +495,9 @@ export async function uploadBookContent(
   filePath: string,
   options: KdpContentUploadOptions = {},
 ): Promise<KdpContentUploadResult> {
-  return withKdpPage(async (page) =>
-    uploadBookContentOnPage(page, titleId, format, fileType, filePath, options),
+  return withKdpPage(
+    async (page) => uploadBookContentOnPage(page, titleId, format, fileType, filePath, options),
+    { headless: false },
   )
 }
 

@@ -7,7 +7,9 @@ import { fetchBookMetadata, setupPageUrl, withKdpPage } from './kdpMetadata.js'
 import { kdpGoto } from './kdpHttp.js'
 import { kdpThrottle } from './kdpRateLimit.js'
 import { clickKdpActionButton } from './kdpUiHelpers.js'
-import { setReleaseNow } from './kdpCreateTitle.js'
+import { ensureReleaseDateScheduled, setReleaseNow } from './kdpCreateTitle.js'
+import type { KdpCategorySpec } from './kdpCategories.js'
+import { gatherBlockers, runWithRecovery, type RecoveryAttempt } from './kdpRecovery.js'
 import {
   type KdpBookFormat,
   type KdpBookMetadata,
@@ -53,6 +55,7 @@ export type KdpMetadataUpdateResult = {
   saved: boolean
   errors: string[]
   book: KdpBookMetadata | null
+  recoveryLog?: RecoveryAttempt[]
 }
 
 export type KdpMetadataBatchUpdateResult = {
@@ -81,13 +84,14 @@ export function plainTextToDescriptionHtml(text: string): string {
     .map((p) => p.trim())
     .filter(Boolean)
   if (paragraphs.length === 0) return ''
-  return paragraphs
-    .map((p) => `<p>${escapeHtml(p.replace(/\n/g, ' '))}</p>`)
-    .join('')
+  return sanitizeDescriptionHtml(
+    paragraphs.map((p) => `<p>${escapeHtml(p.replace(/\n/g, ' '))}</p>`).join(''),
+  )
 }
 
-function normalizeKeywords(keywords: string[]): string[] {
-  return keywords.slice(0, 7).map((kw) => kw.trim())
+/** KDP silently drops descriptions that use unsupported tags such as h1. */
+export function sanitizeDescriptionHtml(html: string): string {
+  return html.replace(/<\/?h1\b[^>]*>/gi, (tag) => (/^<h1/i.test(tag) ? '<p><b>' : '</b></p>'))
 }
 
 function buildFillPayload(changes: KdpMetadataChanges): Record<string, unknown> {
@@ -100,7 +104,7 @@ function buildFillPayload(changes: KdpMetadataChanges): Record<string, unknown> 
     payload.keywords = normalizeKeywords(changes.keywords)
   }
   if (changes.descriptionHtml !== undefined) {
-    payload.descriptionHtml = changes.descriptionHtml
+    payload.descriptionHtml = sanitizeDescriptionHtml(changes.descriptionHtml)
   } else if (changes.description !== undefined) {
     payload.descriptionHtml = plainTextToDescriptionHtml(changes.description)
   }
@@ -138,9 +142,28 @@ async function fillDetailsPage(
   if (Object.keys(payload).length === 0) {
     return { filled: [], skipped: [] }
   }
-  return page.evaluate(
+  if (payload.descriptionHtml !== undefined) {
+    await page
+      .waitForFunction(
+        `() => window.CKEDITOR?.instances && Object.keys(window.CKEDITOR.instances).length > 0`,
+        { timeout: 15_000 },
+      )
+      .catch(() => {})
+    await page.waitForTimeout(500)
+  }
+  const fillResult = (await page.evaluate(
     `(${FILL_DETAILS_FN})(${JSON.stringify(format)}, ${JSON.stringify(payload)})`,
-  ) as Promise<FillResult>
+  )) as FillResult
+  if (payload.descriptionHtml !== undefined) {
+    await page.waitForTimeout(1000)
+    const hiddenLen = await readOnPageDescriptionLength(page, format)
+    if (hiddenLen < 50 && !fillResult.filled.includes('description')) {
+      return page.evaluate(
+        `(${FILL_DETAILS_FN})(${JSON.stringify(format)}, ${JSON.stringify(payload)})`,
+      ) as Promise<FillResult>
+    }
+  }
+  return fillResult
 }
 
 export async function ensureLanguageSelected(
@@ -296,7 +319,10 @@ async function finalizeMetadataSave(
   changes: KdpMetadataChanges,
   fillResult: FillResult,
 ): Promise<KdpMetadataUpdateResult> {
-  const pageErrors = await collectPageErrors(page)
+  const pageErrors = await filterActionablePageErrors(page, await collectPageErrors(page))
+  const leftDetails =
+    !page.url().includes('/details') && page.url().includes(`/title-setup/${format}/${titleId}`)
+  const onPageDescLen = await readOnPageDescriptionLength(page, format)
   const parsePage = await page.context().newPage()
   let refreshed: KdpBookMetadata | null = null
   try {
@@ -305,8 +331,28 @@ async function finalizeMetadataSave(
     await parsePage.close().catch(() => {})
   }
 
+  const descriptionOk =
+    changes.descriptionHtml === undefined ||
+    (refreshed && changesApplied(refreshed, changes)) ||
+    onPageDescLen > 50 ||
+    (leftDetails && onPageDescLen > 0)
+
   if (refreshed && changesApplied(refreshed, changes)) {
     await patchBookInCache(refreshed)
+    return {
+      titleId,
+      format,
+      dryRun: false,
+      filled: fillResult.filled,
+      skipped: fillResult.skipped,
+      saved: true,
+      errors: [],
+      book: refreshed,
+    }
+  }
+
+  if (leftDetails && descriptionOk && pageErrors.length === 0) {
+    if (refreshed) await patchBookInCache(refreshed)
     return {
       titleId,
       format,
@@ -336,9 +382,51 @@ async function finalizeMetadataSave(
 
 async function clickSaveOnDetailsPage(page: Page): Promise<void> {
   await clickKdpActionButton(page, {
-    buttonIds: ['save-and-continue-announce', 'save-announce', 'unsaved-changes-save-announce'],
-    labels: ['Save and Continue', 'Save as Draft', 'Save Changes', 'Save'],
+    buttonIds: ['save-announce', 'unsaved-changes-save-announce', 'save-and-continue-announce'],
+    labels: ['Save as Draft', 'Save Changes', 'Save', 'Save and Continue'],
   })
+}
+
+function isKnownStaleDetailsWarning(message: string): boolean {
+  return /language that was entered|Primary Marketplace Changed/i.test(message)
+}
+
+async function isReleaseNowConfigured(page: Page): Promise<boolean> {
+  return page.evaluate(`(() => {
+    const eventType = document.getElementById('data-release-event-type')?.value
+    if (eventType === 'RELEASE_NOW') return true
+    return [...document.querySelectorAll('input[name="data[print_book][future_release][enabled]"]')]
+      .some((el) => el.value === 'false')
+  })()`) as Promise<boolean>
+}
+
+async function filterActionablePageErrors(page: Page, errors: string[]): Promise<string[]> {
+  const releaseNow = await isReleaseNowConfigured(page)
+  return errors.filter((e) => {
+    if (isKnownStaleDetailsWarning(e)) return false
+    if (releaseNow && /release date is either in the past|previous draft release date/i.test(e)) {
+      return false
+    }
+    return true
+  })
+}
+
+async function readOnPageDescriptionLength(page: Page, format: KdpBookFormat): Promise<number> {
+  return page.evaluate(`(() => {
+    const names =
+      ${JSON.stringify(
+        format === 'paperback'
+          ? ['data[print_book][description]']
+          : format === 'hardcover'
+            ? ['data[hardcover_book][description]']
+            : ['data[description]'],
+      )}
+    for (const name of names) {
+      const el = document.querySelector('input[name="' + name + '"]')
+      if (el && el.value) return el.value.length
+    }
+    return 0
+  })()`) as Promise<number>
 }
 
 async function isDetailsPageReady(page: Page, format: KdpBookFormat): Promise<boolean> {
@@ -581,21 +669,49 @@ export async function saveDetailsOnPage(
   titleId: string,
   format: KdpBookFormat,
   changes: KdpMetadataChanges,
+  options: { categories?: KdpCategorySpec[] } = {},
 ): Promise<KdpMetadataUpdateResult> {
-  if (!page.url().includes('/details')) {
-    await openDetailsPageWithRetry(page, format, titleId)
+  const { result, recoveryLog } = await runWithRecovery(
+    page,
+    { step: 'details', language: changes.language },
+    async () => {
+      if (!page.url().includes('/details')) {
+        await openDetailsPageWithRetry(page, format, titleId)
+      }
+      await ensureReleaseDateScheduled(page)
+      if (changes.language) {
+        await ensureLanguageSelected(page, format, changes.language)
+      }
+      if (options.categories?.length) {
+        const { updateCategoriesOnPage } = await import('./kdpCategories.js')
+        await updateCategoriesOnPage(page, titleId, format, options.categories, {
+          isAdultContent: changes.isAdultContent ?? false,
+          language: changes.language,
+          persist: false,
+        })
+      }
+      const fillResult = await fillDetailsPage(page, format, changes)
+      await clickSaveOnDetailsPage(page)
+      await page.waitForTimeout(5000)
+      if (page.url().toLowerCase().includes('signin')) {
+        throw new KdpAuthError()
+      }
+      return finalizeMetadataSave(page, titleId, format, changes, fillResult)
+    },
+    {
+      maxAttempts: 5,
+      verify: async (r) => r.saved,
+      collectErrors: async (p, err) => {
+        const extra = err instanceof Error ? [err.message] : err ? [String(err)] : []
+        return gatherBlockers(p, extra)
+      },
+    },
+  )
+
+  return {
+    ...result,
+    recoveryLog: recoveryLog.length > 0 ? recoveryLog : undefined,
   }
-  await setReleaseNow(page)
-  if (changes.language) {
-    await ensureLanguageSelected(page, format, changes.language)
-  }
-  const fillResult = await fillDetailsPage(page, format, changes)
-  await clickSaveOnDetailsPage(page)
-  await page.waitForTimeout(5000)
-  if (page.url().toLowerCase().includes('signin')) {
-    throw new KdpAuthError()
-  }
-  return finalizeMetadataSave(page, titleId, format, changes, fillResult)
 }
 
 export async function findBookInCache(

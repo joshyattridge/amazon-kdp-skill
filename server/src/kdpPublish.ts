@@ -6,6 +6,7 @@ import {
 import { completePrintContentOnPage, uploadBookContentOnPage, type KdpPrintContentSettings } from './kdpContentUpdate.js'
 import {
   createTitleOnPage,
+  ensureReleaseDateScheduled,
   openSetupStep,
   resolveTitleIdAfterSave,
   setReleaseNow,
@@ -21,7 +22,7 @@ import {
   updateBookPricingOnPage,
   waitForPricingPageReady,
 } from './kdpPricingUpdate.js'
-import type { KdpBookFormat } from './metadataStore.js'
+import type { RecoveryAttempt } from './kdpRecovery.js'
 import {
   clickPublish,
   clickSaveAsDraft,
@@ -29,6 +30,7 @@ import {
   collectPageErrors,
   titleIdFromUrl,
 } from './kdpWizard.js'
+import type { KdpBookFormat } from './metadataStore.js'
 
 export type PublishContentSpec = {
   interiorPath?: string
@@ -65,6 +67,8 @@ export type PublishBookResult = {
   published: boolean
   steps: PublishStepResult[]
   errors: string[]
+  /** Actions taken to recover from KDP blockers (also persisted in .kdp-session/recovery-learnings.json). */
+  recoveryLog?: RecoveryAttempt[]
 }
 
 function hasMetadata(changes?: KdpMetadataChanges): boolean {
@@ -89,6 +93,7 @@ export async function publishBook(
   return withKdpPage(async (page) => {
     const steps: PublishStepResult[] = []
     const errors: string[] = []
+    const recoveryLog: RecoveryAttempt[] = []
     let titleId = request.titleId?.trim() || 'new'
     let onDetailsPage = false
 
@@ -190,6 +195,7 @@ export async function publishBook(
               errors: [],
             })
           }
+          if (saveResult.recoveryLog?.length) recoveryLog.push(...saveResult.recoveryLog)
         } else {
           await clickSaveAsDraft(page)
           await page.waitForTimeout(3000)
@@ -240,7 +246,15 @@ export async function publishBook(
     }
 
     const content = request.content
-    const detailsSaved = steps.find((s) => s.step === 'save-details')?.success !== false
+    const saveDetailsStep = steps.find((s) => s.step === 'save-details')
+    const detailsFilled = steps.find((s) => s.step === 'details')?.success === true
+    const isExistingDraft = Boolean(titleId && titleId !== 'new' && request.create !== true)
+    const attemptedDetailsSave =
+      hasMetadata(request.details) || (request.categories?.length ?? 0) > 0
+    const detailsSaved =
+      (!attemptedDetailsSave && isExistingDraft && !dryRun) ||
+      saveDetailsStep?.success === true ||
+      (isExistingDraft && !dryRun && detailsFilled)
     if ((content?.interiorPath || content?.coverPath) && detailsSaved && !dryRun) {
       try {
         const result = await completePrintContentOnPage(page, titleId, format, {
@@ -268,6 +282,7 @@ export async function publishBook(
           errors.push('Cover upload could not be verified.')
         }
         if (result.errors.length) errors.push(...result.errors)
+        if (result.recoveryLog?.length) recoveryLog.push(...result.recoveryLog)
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Content step failed.'
         steps.push({ step: 'content', success: false, errors: [msg] })
@@ -315,6 +330,7 @@ export async function publishBook(
             errors: result.errors,
           })
           if (result.errors.length) errors.push(...result.errors)
+          if (result.recoveryLog?.length) recoveryLog.push(...result.recoveryLog)
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Pricing step failed.'
           steps.push({ step: 'pricing', success: false, errors: [msg] })
@@ -378,8 +394,9 @@ export async function publishBook(
       published,
       steps,
       errors,
+      recoveryLog: recoveryLog.length > 0 ? recoveryLog : undefined,
     }
-  })
+  }, { headless: false })
 }
 
 export async function createTitle(format: KdpBookFormat): Promise<{ titleId: string; url: string }> {

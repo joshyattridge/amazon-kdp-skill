@@ -39,6 +39,19 @@ npm run publish:book -- output/YourBook.pricing-only.json --live
 
 (JSON with `"titleId"`, `"pricing"` only, `"create": false`.)
 
+## Automatic error recovery
+
+When KDP blocks a step (modals, release-date warnings, preview required, Server Busy, etc.), the server:
+
+1. **Collects blockers** from page alerts and body text
+2. **Plans recovery actions** from a built-in playbook plus **learned fixes** in `.kdp-session/recovery-learnings.json`
+3. **Retries the step** (up to 4–5 attempts) after executing recoveries
+4. **Records outcomes** — successful action/error pairs get higher priority next time
+
+Inspect learnings: `GET http://localhost:3001/api/kdp/recovery/learnings`
+
+Publish responses include `recoveryLog` when recoveries ran.
+
 ## Cover upload shows NOT_STARTED
 
 Ensure print settings (trim size, ink/paper type) are set before cover upload. The content flow now waits for hidden `publisher_cover[status]=SUCCESS` before continuing.

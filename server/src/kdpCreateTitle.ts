@@ -71,13 +71,21 @@ export async function openSetupStep(
 }
 
 export async function setReleaseNow(page: Page): Promise<void> {
-  const clearDate = page.getByRole('link', { name: /Clear Date/i }).first()
-  if (await clearDate.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await clearDate.click({ timeout: 10_000 })
-    await page.waitForTimeout(1000)
+  for (const clearDate of await page.getByRole('link', { name: /Clear Date/i }).all()) {
+    if (await clearDate.isVisible({ timeout: 500 }).catch(() => false)) {
+      await clearDate.click({ timeout: 10_000 }).catch(() => {})
+      await page.waitForTimeout(800)
+    }
   }
 
-  const scheduleLink = page.locator('a').filter({ hasText: /Schedule my book/i }).first()
+  const releaseNow = page.locator('a').filter({ hasText: /Release my book for sale now/i }).first()
+  if (await releaseNow.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await releaseNow.click({ timeout: 10_000 })
+    await page.waitForTimeout(1500)
+    return
+  }
+
+  const scheduleLink = page.locator('a').filter({ hasText: /Schedule my book'?s? release/i }).first()
   if (await scheduleLink.isVisible({ timeout: 3000 }).catch(() => false)) {
     await scheduleLink.click({ timeout: 10_000 })
     await page.waitForTimeout(1500)
@@ -111,4 +119,22 @@ export async function setReleaseNow(page: Page): Promise<void> {
       await page.waitForTimeout(1500)
     }
   }
+}
+
+export async function ensureReleaseDateScheduled(page: Page): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await setReleaseNow(page)
+    const ok = (await page.evaluate(`(() => {
+      const enabledInputs = [...document.querySelectorAll('input[name="data[print_book][future_release][enabled]"]')]
+      if (enabledInputs.some((el) => el.value === 'false')) return true
+      const enabled = enabledInputs.some((el) => el.value === 'true')
+      const date =
+        document.querySelector('input[name="data[print_book][future_release][release_date]"]')?.value ||
+        document.getElementById('release-date-picker-input')?.value
+      return enabled && !!date
+    })()`)) as boolean
+    if (ok) return true
+    await page.waitForTimeout(1000)
+  }
+  return false
 }

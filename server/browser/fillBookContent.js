@@ -48,7 +48,7 @@
 
   if (changes.inkAndPaper !== undefined) {
     const aliases = {
-      premium_color: ['COLOR_WHITE', 'COLOR_COLOR', 'premium_color'],
+      premium_color: ['COLOR_COLOR', 'premium_color'],
       standard_color: ['COLOR_WHITE', 'standard_color'],
       black_and_white: ['BW_WHITE', 'BW_CREAM', 'black_and_white'],
     }

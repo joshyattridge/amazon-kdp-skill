@@ -46,6 +46,7 @@ import {
 } from './metadataStore.js'
 import { readSessionMeta, removeSession } from './session.js'
 import { PORT } from './config.js'
+import { readRecoveryLearnings } from './kdpRecoveryStore.js'
 
 const app = express()
 
@@ -54,6 +55,17 @@ app.use(express.json())
 
 app.get('/api/kdp/health', (_req, res) => {
   res.json({ ok: true })
+})
+
+app.get('/api/kdp/recovery/learnings', async (_req, res) => {
+  try {
+    const learnings = await readRecoveryLearnings()
+    res.json(learnings)
+  } catch (e) {
+    res.status(500).json({
+      error: e instanceof Error ? e.message : 'Failed to read recovery learnings.',
+    })
+  }
 })
 
 app.get('/api/kdp/status', async (_req, res) => {
