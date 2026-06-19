@@ -130,38 +130,72 @@
   }
 
   if (changes.descriptionHtml !== undefined) {
-    let ok = setByNames(fields.description, changes.descriptionHtml)
-    if (!ok) {
+    const html = changes.descriptionHtml
+    let ok = false
+
+    const syncHiddenDescription = () => {
       for (const name of fields.description) {
-        const el = document.querySelector(`input[name="${name}"]`)
+        const el = document.querySelector(`input[name="${name}"], textarea[name="${name}"]`)
         if (el) {
-          el.value = changes.descriptionHtml
+          el.value = html
           dispatchInput(el)
-          ok = true
-          break
+          return true
         }
+      }
+      return false
+    }
+
+    const setViaCke = () => {
+      const CK = window.CKEDITOR
+      if (!CK?.instances) return false
+      const keys = Object.keys(CK.instances)
+      for (const key of keys) {
+        const inst = CK.instances[key]
+        if (!inst?.setData) continue
+        const el = inst.element?.$ 
+        const name = el?.getAttribute?.('name') || el?.name || ''
+        const isDescription =
+          fields.description.some((n) => name === n) ||
+          /description/i.test(key) ||
+          /description/i.test(name)
+        if (isDescription || keys.length === 1) {
+          inst.setData(html, {
+            callback: () => {
+              syncHiddenDescription()
+              inst.updateElement()
+            },
+          })
+          inst.updateElement()
+          return true
+        }
+      }
+      const first = CK.instances[keys[0]]
+      if (first?.setData) {
+        first.setData(html, { callback: () => first.updateElement() })
+        first.updateElement()
+        return true
+      }
+      return false
+    }
+
+    ok = setViaCke() || syncHiddenDescription()
+
+    if (!ok) {
+      const iframe = document.querySelector('iframe[id*="description"], iframe.cke_wysiwyg_frame')
+      if (iframe?.contentDocument?.body) {
+        iframe.contentDocument.body.innerHTML = html
+        ok = syncHiddenDescription() || true
       }
     }
 
-    const editor = document.querySelector(
-      '[contenteditable="true"], .cke_editable, iframe[id*="description"]',
-    )
-    if (editor) {
-      if (editor.tagName === 'IFRAME') {
-        try {
-          const doc = editor.contentDocument || editor.contentWindow?.document
-          if (doc?.body) {
-            doc.body.innerHTML = changes.descriptionHtml
-          }
-        } catch {
-          /* cross-origin iframe */
-        }
-      } else if (editor.isContentEditable) {
-        editor.innerHTML = changes.descriptionHtml
-      }
+    const editable = document.querySelector('.cke_editable[contenteditable="true"], [contenteditable="true"]')
+    if (editable && !ok) {
+      editable.innerHTML = html
+      editable.dispatchEvent(new Event('input', { bubbles: true }))
+      ok = syncHiddenDescription() || true
     }
 
-    if (ok || editor) filled.push('description')
+    if (ok) filled.push('description')
     else skipped.push('description')
   }
 

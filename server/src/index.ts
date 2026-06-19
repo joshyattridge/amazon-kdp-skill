@@ -353,6 +353,7 @@ app.post('/api/kdp/categories/update', async (req, res) => {
     res.json(
       await updateCategories(parsed.titleId, parsed.format, parsed.categories, {
         isAdultContent: parsed.isAdultContent,
+        language: parsed.language,
       }),
     )
   } catch (e) {
@@ -586,6 +587,7 @@ function parseCategoriesBody(body: unknown):
       format: KdpBookFormat
       categories: KdpCategorySpec[]
       isAdultContent?: boolean
+      language?: string
     }
   | { error: string } {
   const raw = body as Record<string, unknown>
@@ -609,6 +611,7 @@ function parseCategoriesBody(body: unknown):
     categories,
     isAdultContent:
       typeof raw.isAdultContent === 'boolean' ? raw.isAdultContent : undefined,
+    language: typeof raw.language === 'string' ? raw.language : undefined,
   }
 }
 

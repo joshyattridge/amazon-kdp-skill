@@ -6,6 +6,8 @@ import { KdpAuthError, KdpClientError } from './kdpClient.js'
 import { fetchBookMetadata, setupPageUrl, withKdpPage } from './kdpMetadata.js'
 import { kdpGoto } from './kdpHttp.js'
 import { kdpThrottle } from './kdpRateLimit.js'
+import { clickKdpActionButton } from './kdpUiHelpers.js'
+import { setReleaseNow } from './kdpCreateTitle.js'
 import {
   type KdpBookFormat,
   type KdpBookMetadata,
@@ -141,7 +143,7 @@ async function fillDetailsPage(
   ) as Promise<FillResult>
 }
 
-async function ensureLanguageSelected(
+export async function ensureLanguageSelected(
   page: Page,
   format: KdpBookFormat,
   language: string,
@@ -166,22 +168,61 @@ async function ensureLanguageSelected(
             : normalized
 
   await page.evaluate(
-    ({ id, wantedValue, wantedText }) => {
-      const el = document.getElementById(id) as HTMLSelectElement | null
+    `(({ id, wantedValue, wantedText }) => {
+      const syncHidden = (val) => {
+        for (const name of [
+          'data[print_book][language]',
+          'data[language]',
+          'data[hardcover_book][language]',
+        ]) {
+          const hidden = document.querySelector('input[name="' + name + '"]')
+          if (hidden) {
+            hidden.value = val
+            hidden.dispatchEvent(new Event('change', { bubbles: true }))
+          }
+        }
+      }
+      const el = document.getElementById(id)
       if (!el) return
       for (const opt of el.options) {
         if (
           opt.value.toLowerCase() === wantedValue ||
-          opt.text.trim().toLowerCase() === wantedText
+          opt.text.trim().toLowerCase() === wantedText ||
+          opt.text.trim().toLowerCase() === wantedValue
         ) {
           el.value = opt.value
           el.dispatchEvent(new Event('change', { bubbles: true }))
+          syncHidden(opt.value)
           return
         }
       }
-    },
-    { id: selectId, wantedValue: value, wantedText: normalized },
+      for (const opt of el.options) {
+        if (opt.text.trim().toLowerCase().includes(wantedText)) {
+          el.value = opt.value
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+          syncHidden(opt.value)
+          return
+        }
+      }
+    })(${JSON.stringify({ id: selectId, wantedValue: value, wantedText: normalized })})`,
   )
+
+  const dropdown = page
+    .locator('label')
+    .filter({ hasText: /^Language$/i })
+    .locator('..')
+    .locator('span.a-button-dropdown')
+    .first()
+  if (await dropdown.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await dropdown.click({ timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(500)
+    const english = page.locator('a.a-dropdown-link').filter({ hasText: /^English$/i }).first()
+    if (await english.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await english.click({ timeout: 5000 }).catch(() => {})
+      await page.waitForTimeout(500)
+    }
+  }
+
   await page.waitForTimeout(500)
 }
 
@@ -206,6 +247,15 @@ function keywordSlots(keywords: string[]): string[] {
   return slots.slice(0, 7)
 }
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function changesApplied(book: KdpBookMetadata, changes: KdpMetadataChanges): boolean {
   if (changes.title !== undefined && book.title.trim() !== changes.title.trim()) {
     return false
@@ -215,6 +265,13 @@ function changesApplied(book: KdpBookMetadata, changes: KdpMetadataChanges): boo
   }
   if (changes.description !== undefined && book.description.trim() !== changes.description.trim()) {
     return false
+  }
+  if (changes.descriptionHtml !== undefined) {
+    const expected = stripHtml(changes.descriptionHtml)
+    const actual = stripHtml(book.description)
+    if (!expected || !actual) return false
+    const probe = expected.slice(0, Math.min(80, expected.length))
+    if (!actual.includes(probe) && !expected.includes(actual.slice(0, 80))) return false
   }
   if (changes.seriesTitle !== undefined && book.seriesTitle.trim() !== changes.seriesTitle.trim()) {
     return false
@@ -278,33 +335,10 @@ async function finalizeMetadataSave(
 }
 
 async function clickSaveOnDetailsPage(page: Page): Promise<void> {
-  const patterns = [
-    /^save and continue$/i,
-    /^save as draft$/i,
-    /^save changes$/i,
-    /^save and publish$/i,
-    /^save$/i,
-  ]
-
-  for (const pattern of patterns) {
-    const button = page.getByRole('button', { name: pattern }).first()
-    if (await button.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await button.click({ timeout: 15_000 })
-      await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
-      await page.waitForTimeout(1500)
-      return
-    }
-  }
-
-  const submit = page.locator('input[type="submit"][value*="Save" i]').first()
-  if (await submit.isVisible({ timeout: 1500 }).catch(() => false)) {
-    await submit.click({ timeout: 15_000 })
-    await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
-    await page.waitForTimeout(1500)
-    return
-  }
-
-  throw new KdpClientError('Could not find a Save button on the KDP details page.')
+  await clickKdpActionButton(page, {
+    buttonIds: ['save-and-continue-announce', 'save-announce', 'unsaved-changes-save-announce'],
+    labels: ['Save and Continue', 'Save as Draft', 'Save Changes', 'Save'],
+  })
 }
 
 async function isDetailsPageReady(page: Page, format: KdpBookFormat): Promise<boolean> {
@@ -400,6 +434,11 @@ export async function updateBookMetadata(
   return withKdpPage(async (page) => {
     await openDetailsPageWithRetry(page, format, titleId)
 
+    if (changes.language) {
+      await ensureLanguageSelected(page, format, changes.language)
+    }
+    await setReleaseNow(page)
+
     const fillResult = await fillDetailsPage(page, format, changes)
 
     if (fillResult.skipped.length > 0 && fillResult.filled.length === 0) {
@@ -420,6 +459,11 @@ export async function updateBookMetadata(
         book: null,
       }
     }
+
+    if (changes.language) {
+      await ensureLanguageSelected(page, format, changes.language)
+    }
+    await setReleaseNow(page)
 
     await clickSaveOnDetailsPage(page)
 
@@ -498,9 +542,6 @@ export async function updateBookMetadataOnPage(
   }
 
   const fillResult = await fillDetailsPage(page, format, changes)
-  if (changes.language) {
-    await ensureLanguageSelected(page, format, changes.language)
-  }
 
   if (fillResult.skipped.length > 0 && fillResult.filled.length === 0) {
     throw new KdpClientError(
@@ -521,12 +562,39 @@ export async function updateBookMetadataOnPage(
     }
   }
 
+  if (changes.language) {
+    await ensureLanguageSelected(page, format, changes.language)
+  }
+  await setReleaseNow(page)
+
   await clickSaveOnDetailsPage(page)
 
   if (page.url().toLowerCase().includes('signin')) {
     throw new KdpAuthError()
   }
 
+  return finalizeMetadataSave(page, titleId, format, changes, fillResult)
+}
+
+export async function saveDetailsOnPage(
+  page: Page,
+  titleId: string,
+  format: KdpBookFormat,
+  changes: KdpMetadataChanges,
+): Promise<KdpMetadataUpdateResult> {
+  if (!page.url().includes('/details')) {
+    await openDetailsPageWithRetry(page, format, titleId)
+  }
+  await setReleaseNow(page)
+  if (changes.language) {
+    await ensureLanguageSelected(page, format, changes.language)
+  }
+  const fillResult = await fillDetailsPage(page, format, changes)
+  await clickSaveOnDetailsPage(page)
+  await page.waitForTimeout(5000)
+  if (page.url().toLowerCase().includes('signin')) {
+    throw new KdpAuthError()
+  }
   return finalizeMetadataSave(page, titleId, format, changes, fillResult)
 }
 

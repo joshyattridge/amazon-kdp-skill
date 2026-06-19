@@ -13,6 +13,7 @@ import {
 import { withKdpPage } from './kdpMetadata.js'
 import {
   type KdpMetadataChanges,
+  saveDetailsOnPage,
   updateBookMetadataOnPage,
 } from './kdpMetadataUpdate.js'
 import {
@@ -138,7 +139,10 @@ export async function publishBook(
           titleId,
           format,
           request.categories,
-          { isAdultContent: request.details?.isAdultContent ?? false },
+          {
+            isAdultContent: request.details?.isAdultContent ?? false,
+            language: request.details?.language ?? 'English',
+          },
         )
         onDetailsPage = true
         steps.push({
@@ -163,12 +167,46 @@ export async function publishBook(
 
     if (!dryRun && (hasMetadata(request.details) || request.categories?.length)) {
       try {
-        if (titleId === 'new') {
-          await clickSaveAsDraft(page)
+        if (hasMetadata(request.details)) {
+          const saveResult = await saveDetailsOnPage(
+            page,
+            titleId,
+            format,
+            request.details!,
+          )
+          if (!saveResult.saved) {
+            steps.push({
+              step: 'save-details',
+              success: false,
+              detail: { titleId },
+              errors: saveResult.errors,
+            })
+            errors.push(...saveResult.errors)
+          } else {
+            steps.push({
+              step: 'save-details',
+              success: true,
+              detail: { titleId, book: saveResult.book },
+              errors: [],
+            })
+          }
         } else {
-          await clickSaveAndContinue(page)
+          await clickSaveAsDraft(page)
+          await page.waitForTimeout(3000)
+          const pageErrors = await collectPageErrors(page)
+          const gotId = titleIdFromUrl(page.url())
+          if (gotId) titleId = gotId
+          const blocking = pageErrors.filter(
+            (e) => !/language that was entered|release date is either in the past/i.test(e),
+          )
+          steps.push({
+            step: 'save-details',
+            success: blocking.length === 0 || !!gotId,
+            detail: { titleId },
+            errors: blocking,
+          })
+          if (blocking.length) errors.push(...blocking)
         }
-        await page.waitForTimeout(3000)
         let resolved: string | null = null
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
@@ -182,28 +220,6 @@ export async function publishBook(
         const fromUrl = titleIdFromUrl(page.url())
         if (fromUrl) titleId = fromUrl
         onDetailsPage = false
-        const pageErrors = await collectPageErrors(page)
-        const gotId = titleIdFromUrl(page.url())
-        if (gotId) titleId = gotId
-        const blocking = pageErrors.filter(
-          (e) => !/language that was entered|release date is either in the past/i.test(e),
-        )
-        if (blocking.length > 0 && !gotId) {
-          steps.push({
-            step: 'save-details',
-            success: false,
-            detail: { titleId },
-            errors: blocking,
-          })
-          errors.push(...blocking)
-        } else {
-          steps.push({
-            step: 'save-details',
-            success: true,
-            detail: { titleId },
-            errors: [],
-          })
-        }
       } catch (e) {
         const pageErrors = await collectPageErrors(page)
         const msg = e instanceof Error ? e.message : 'Save details failed.'
@@ -377,9 +393,12 @@ export async function updateCategories(
   titleId: string,
   format: KdpBookFormat,
   categories: KdpCategorySpec[],
-  options: { isAdultContent?: boolean } = {},
+  options: { isAdultContent?: boolean; language?: string } = {},
 ) {
   return withKdpPage(async (page) =>
-    updateCategoriesOnPage(page, titleId, format, categories, options),
+    updateCategoriesOnPage(page, titleId, format, categories, {
+      ...options,
+      persist: true,
+    }),
   )
 }

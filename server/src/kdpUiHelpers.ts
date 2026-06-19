@@ -52,11 +52,15 @@ export async function clickKdpActionButton(
   for (const id of buttonIds) {
     const clicked = (await page.evaluate(
       `(buttonId) => {
-        const btn = document.getElementById(buttonId)
-        if (!btn) return null
-        btn.scrollIntoView({ block: 'center' })
-        btn.click()
-        return (btn.textContent || '').replace(/\\s+/g, ' ').trim() || buttonId
+        const el = document.getElementById(buttonId)
+        if (!el) return null
+        const target =
+          el.closest('button, .a-button') ||
+          (el.classList?.contains('a-button-inner') ? el.closest('.a-button') : null) ||
+          el
+        target.scrollIntoView({ block: 'center' })
+        target.click()
+        return (target.textContent || '').replace(/\\s+/g, ' ').trim() || buttonId
       }`,
       id,
     )) as string | null
@@ -64,6 +68,17 @@ export async function clickKdpActionButton(
       await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
       await page.waitForTimeout(1000)
       return clicked
+    }
+  }
+
+  for (const label of labels) {
+    const btn = page.getByRole('button', { name: new RegExp(`^${label}$`, 'i') }).first()
+    if (await btn.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await btn.scrollIntoViewIfNeeded().catch(() => {})
+      await btn.click({ timeout: 15_000 })
+      await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
+      await page.waitForTimeout(1000)
+      return label
     }
   }
 

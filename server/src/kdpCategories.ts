@@ -4,6 +4,8 @@ import { setupPageUrl } from './kdpMetadata.js'
 import { kdpGoto } from './kdpHttp.js'
 import type { KdpBookFormat } from './metadataStore.js'
 import { bypassServerBusy, collectPageErrors } from './kdpWizard.js'
+import { clickKdpActionButton } from './kdpUiHelpers.js'
+import { ensureLanguageSelected } from './kdpMetadataUpdate.js'
 
 /** Category path segments, e.g. ["Children's Books", "Humor"] or browse node IDs. */
 export type KdpCategorySpec =
@@ -16,6 +18,13 @@ export type KdpCategoryUpdateResult = {
   applied: number
   browseNodeIds: string[]
   errors: string[]
+  saved: boolean
+}
+
+export type KdpCategoryUpdateOptions = {
+  isAdultContent?: boolean
+  language?: string
+  persist?: boolean
 }
 
 function browseNodeFieldName(format: KdpBookFormat, index: number): string {
@@ -187,8 +196,9 @@ export async function updateCategoriesOnPage(
   titleId: string,
   format: KdpBookFormat,
   categories: KdpCategorySpec[],
-  options: { isAdultContent?: boolean } = {},
+  options: KdpCategoryUpdateOptions = {},
 ): Promise<KdpCategoryUpdateResult> {
+  const persist = options.persist ?? false
   const detailsUrl = setupPageUrl(format, titleId, 'details')
   if (!page.url().includes(`/title-setup/${format}/`)) {
     await kdpGoto(page, detailsUrl, { waitUntil: 'networkidle', timeout: 120_000 })
@@ -196,6 +206,9 @@ export async function updateCategoriesOnPage(
   await bypassServerBusy(page)
 
   await ensureAdultContentAnswered(page, options.isAdultContent ?? false)
+  if (options.language) {
+    await ensureLanguageSelected(page, format, options.language)
+  }
 
   const browseIds: string[] = []
   const errors: string[] = []
@@ -225,11 +238,32 @@ export async function updateCategoriesOnPage(
   const finalIds = await readBrowseNodeIds(page, format)
   const pageErrors = await collectPageErrors(page)
 
+  let saved = false
+  if (persist && finalIds.length > 0) {
+    try {
+      if (options.language) {
+        await ensureLanguageSelected(page, format, options.language)
+      }
+      const { setReleaseNow } = await import('./kdpCreateTitle.js')
+      await setReleaseNow(page)
+      await clickKdpActionButton(page, {
+        buttonIds: ['save-announce', 'save-and-continue-announce'],
+        labels: ['Save as Draft', 'Save and Continue', 'Save'],
+      })
+      await page.waitForTimeout(2000)
+      saved = true
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not save categories on details page.'
+      errors.push(msg)
+    }
+  }
+
   return {
     titleId,
     format,
     applied: finalIds.length,
     browseNodeIds: finalIds.length > 0 ? finalIds : browseIds,
     errors: [...errors, ...pageErrors],
+    saved,
   }
 }

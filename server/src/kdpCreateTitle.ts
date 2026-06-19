@@ -77,71 +77,38 @@ export async function setReleaseNow(page: Page): Promise<void> {
     await page.waitForTimeout(1000)
   }
 
-  const future = new Date()
-  future.setDate(future.getDate() + 7)
-  const mm = String(future.getMonth() + 1).padStart(2, '0')
-  const dd = String(future.getDate()).padStart(2, '0')
-  const yyyy = future.getFullYear()
-  const isoDate = `${yyyy}-${mm}-${dd}`
-  const displayDate = `${mm}/${dd}/${yyyy}`
-
-  const scheduleLink = page.getByRole('link', { name: /Schedule a release date/i }).first()
-  if (await scheduleLink.isVisible({ timeout: 2000 }).catch(() => false)) {
+  const scheduleLink = page.locator('a').filter({ hasText: /Schedule my book/i }).first()
+  if (await scheduleLink.isVisible({ timeout: 3000 }).catch(() => false)) {
     await scheduleLink.click({ timeout: 10_000 })
-    await page.waitForTimeout(1000)
+    await page.waitForTimeout(1500)
   }
 
-  await page.evaluate(
-    ({ isoDate, displayDate }) => {
-      for (const selector of [
-        'input[name="data[release_event_type]-radio"][value="FUTURE_RELEASE"]',
-        'input[name="data[release_event_type]-radio"][value="PREORDER"]',
-      ]) {
-        const radio = document.querySelector(selector) as HTMLInputElement | null
-        if (radio) {
-          radio.checked = true
-          radio.dispatchEvent(new Event('change', { bubbles: true }))
-          break
-        }
-      }
-      const releaseType = document.querySelector(
-        'input[name="data[release_event_type]"]',
-      ) as HTMLInputElement | null
-      if (releaseType) {
-        releaseType.value = 'FUTURE_RELEASE'
-        releaseType.dispatchEvent(new Event('change', { bubbles: true }))
-      }
-      for (const name of [
-        'data[print_book][future_release][enabled]',
-        'data[future_release][enabled]',
-      ]) {
-        const el = document.querySelector(`input[name="${name}"]`) as HTMLInputElement | null
-        if (el) {
-          el.value = 'true'
-          el.dispatchEvent(new Event('change', { bubbles: true }))
-        }
-      }
-      const releaseDate = document.querySelector(
-        'input[name="data[print_book][future_release][release_date]"]',
-      ) as HTMLInputElement | null
-      if (releaseDate) {
-        releaseDate.value = isoDate
-        releaseDate.dispatchEvent(new Event('change', { bubbles: true }))
-      }
-      const picker = document.getElementById('release-date-picker-input') as HTMLInputElement | null
-      if (picker) {
-        picker.value = displayDate
-        picker.dispatchEvent(new Event('input', { bubbles: true }))
-        picker.dispatchEvent(new Event('change', { bubbles: true }))
-      }
-    },
-    { isoDate, displayDate },
-  )
+  const future = new Date()
+  future.setDate(future.getDate() + 14)
+  const targetDay = String(future.getDate())
+  const targetMonth = future.getMonth()
+  const now = new Date()
 
   const picker = page.locator('#release-date-picker-input')
-  if (await picker.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await picker.fill(displayDate)
-    await picker.press('Tab').catch(() => {})
-    await page.waitForTimeout(500)
+  if (await picker.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await picker.click({ timeout: 10_000 })
+    await page.waitForTimeout(1000)
+
+    if (targetMonth !== now.getMonth()) {
+      const nextBtn = page.locator('.ui-datepicker-next').first()
+      if (await nextBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await nextBtn.click()
+        await page.waitForTimeout(500)
+      }
+    }
+
+    const dayLink = page
+      .locator('.ui-datepicker-calendar td:not(.ui-datepicker-unselectable) a.ui-state-default')
+      .filter({ hasText: new RegExp(`^${targetDay}$`) })
+      .first()
+    if (await dayLink.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await dayLink.click({ timeout: 10_000 })
+      await page.waitForTimeout(1500)
+    }
   }
 }
