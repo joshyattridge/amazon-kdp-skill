@@ -80,8 +80,31 @@
 
   if (changes.listPriceUsd !== undefined) {
     let ok = setPriceById('usd', changes.listPriceUsd)
+    if (!ok) {
+      ok = setByName('data[print_book][list_price][USD][amount]', changes.listPriceUsd)
+    }
+    if (!ok) {
+      ok = setByName('data[print_book][list_price][US][amount]', changes.listPriceUsd)
+    }
     if (!ok && format === 'kindle') {
       ok = setKindlePrice('US', changes.listPriceUsd)
+    }
+    if (!ok) {
+      for (const el of document.querySelectorAll(
+        'input[id*="price"], input[name*="price"], input[name*="list_price"]',
+      )) {
+        const name = el.getAttribute('name') || ''
+        const id = el.id || ''
+        if (
+          /usd|us\b|\[US\]/i.test(name + id) &&
+          el.offsetParent !== null
+        ) {
+          el.value = changes.listPriceUsd
+          dispatchInput(el)
+          ok = true
+          break
+        }
+      }
     }
     if (ok) filled.push('listPriceUsd')
     else skipped.push('listPriceUsd')

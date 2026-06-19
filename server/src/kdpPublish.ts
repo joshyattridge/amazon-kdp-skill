@@ -18,6 +18,7 @@ import {
 import {
   type KdpPricingChanges,
   updateBookPricingOnPage,
+  waitForPricingPageReady,
 } from './kdpPricingUpdate.js'
 import type { KdpBookFormat } from './metadataStore.js'
 import {
@@ -142,9 +143,9 @@ export async function publishBook(
         onDetailsPage = true
         steps.push({
           step: 'categories',
-          success: result.applied > 0,
+          success: result.browseNodeIds.length > 0 || result.applied > 0,
           detail: { browseNodeIds: result.browseNodeIds, applied: result.applied },
-          errors: result.errors,
+          errors: result.errors.filter((e) => !/Add at least one new category/i.test(e)),
         })
         if (result.errors.length) errors.push(...result.errors)
       } catch (e) {
@@ -167,7 +168,16 @@ export async function publishBook(
         } else {
           await clickSaveAndContinue(page)
         }
-        const resolved = await resolveTitleIdAfterSave(page, format)
+        await page.waitForTimeout(3000)
+        let resolved: string | null = null
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            resolved = await resolveTitleIdAfterSave(page, format)
+            break
+          } catch {
+            await page.waitForTimeout(2000)
+          }
+        }
         if (resolved) titleId = resolved
         const fromUrl = titleIdFromUrl(page.url())
         if (fromUrl) titleId = fromUrl
@@ -222,9 +232,12 @@ export async function publishBook(
           coverPath: content.coverPath || '',
           printSettings: content.printSettings,
         })
+        const contentOk =
+          (!content.interiorPath || result.interiorUploaded) &&
+          (!content.coverPath || result.coverUploaded)
         steps.push({
           step: 'content',
-          success: result.interiorUploaded && result.coverUploaded,
+          success: contentOk,
           detail: {
             isbn: result.isbn,
             interiorUploaded: result.interiorUploaded,
@@ -232,8 +245,12 @@ export async function publishBook(
           },
           errors: result.errors,
         })
-        if (!result.interiorUploaded) errors.push('Interior upload could not be verified.')
-        if (!result.coverUploaded) errors.push('Cover upload could not be verified.')
+        if (content.interiorPath && !result.interiorUploaded) {
+          errors.push('Interior upload could not be verified.')
+        }
+        if (content.coverPath && !result.coverUploaded) {
+          errors.push('Cover upload could not be verified.')
+        }
         if (result.errors.length) errors.push(...result.errors)
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Content step failed.'
@@ -244,12 +261,52 @@ export async function publishBook(
       steps.push({ step: 'content', success: true, detail: { dryRun: true }, errors: [] })
     }
 
+    const contentStep = steps.find((s) => s.step === 'content')
     const contentSaved =
       !request.content?.interiorPath && !request.content?.coverPath
         ? true
-        : steps.find((s) => s.step === 'content')?.success === true
-    if (request.pricing && detailsSaved && contentSaved) {
-      if (!dryRun) {
+        : contentStep?.success === true
+
+    if (request.pricing && detailsSaved && contentSaved && !dryRun) {
+      const pricingReady = await waitForPricingPageReady(page, format, titleId, {
+        timeoutMs: 600_000,
+      })
+      if (!pricingReady) {
+        steps.push({
+          step: 'pricing',
+          success: false,
+          errors: [
+            'KDP pricing page did not become available — manuscript/cover may still be processing.',
+          ],
+        })
+        errors.push(
+          'KDP pricing page did not become available — manuscript/cover may still be processing.',
+        )
+      } else {
+        try {
+          const result = await updateBookPricingOnPage(
+            page,
+            titleId,
+            format,
+            request.pricing,
+            false,
+            { skipOpen: true },
+          )
+          steps.push({
+            step: 'pricing',
+            success: result.saved,
+            detail: { filled: result.filled, saved: result.saved },
+            errors: result.errors,
+          })
+          if (result.errors.length) errors.push(...result.errors)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Pricing step failed.'
+          steps.push({ step: 'pricing', success: false, errors: [msg] })
+          errors.push(msg)
+        }
+      }
+    } else if (request.pricing && detailsSaved && dryRun) {
+      if (titleId !== 'new') {
         await openSetupStep(page, format, titleId, 'pricing')
       }
       try {
@@ -258,12 +315,12 @@ export async function publishBook(
           titleId,
           format,
           request.pricing,
-          dryRun,
-          { skipOpen: !dryRun },
+          true,
+          { skipOpen: titleId === 'new' },
         )
         steps.push({
           step: 'pricing',
-          success: dryRun ? result.filled.length > 0 : result.saved,
+          success: result.filled.length > 0,
           detail: { filled: result.filled, saved: result.saved },
           errors: result.errors,
         })

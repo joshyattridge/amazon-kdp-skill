@@ -1,5 +1,6 @@
 import type { Page } from 'playwright'
 import { KdpClientError } from './kdpClient.js'
+import { clickKdpActionButton } from './kdpUiHelpers.js'
 
 const SAVE_PATTERNS = [
   /^save and continue$/i,
@@ -51,11 +52,17 @@ export async function clickSave(page: Page): Promise<string> {
 }
 
 export async function clickSaveAsDraft(page: Page): Promise<string> {
-  return clickPageButton(page, [/^save as draft$/i])
+  return clickKdpActionButton(page, {
+    buttonIds: ['save-announce'],
+    labels: ['Save as Draft'],
+  })
 }
 
 export async function clickSaveAndContinue(page: Page): Promise<string> {
-  return clickPageButton(page, [/^save and continue$/i, /^save and publish$/i, /^continue$/i, /^save$/i])
+  return clickKdpActionButton(page, {
+    buttonIds: ['save-and-continue-announce', 'unsaved-changes-save-announce'],
+    labels: ['Save and Continue', 'Continue', 'Save'],
+  })
 }
 
 export async function clickPublish(page: Page): Promise<string> {

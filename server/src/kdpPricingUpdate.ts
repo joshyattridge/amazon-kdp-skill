@@ -11,6 +11,7 @@ import {
   type KdpBookMetadata,
   patchBookInCache,
 } from './metadataStore.js'
+import { clickKdpActionButton } from './kdpUiHelpers.js'
 
 const FILL_PRICING_FN = fs.readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), '../browser/fillBookPricing.js'),
@@ -68,46 +69,47 @@ async function fillPricingPage(
 }
 
 async function clickSaveOnPricingPage(page: Page): Promise<void> {
-  const patterns = [
-    /^save and continue$/i,
-    /^save as draft$/i,
-    /^save and publish$/i,
-    /^save changes$/i,
-    /^save$/i,
-    /^publish$/i,
-  ]
+  await clickKdpActionButton(page, {
+    labels: ['Save and Continue', 'Save as Draft', 'Save and Publish', 'Save'],
+  })
+}
 
-  for (const pattern of patterns) {
-    const button = page.getByRole('button', { name: pattern }).first()
-    if (await button.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await button.click({ timeout: 15_000 })
-      await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
-      await page.waitForTimeout(1500)
-      return
-    }
+/** Poll until KDP unlocks the pricing page (content processing complete). */
+export async function waitForPricingPageReady(
+  page: Page,
+  format: KdpBookFormat,
+  titleId: string,
+  options: { timeoutMs?: number } = {},
+): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? 600_000
+  const deadline = Date.now() + timeoutMs
+  const pricingUrl = setupPageUrl(format, titleId, 'pricing')
+
+  while (Date.now() < deadline) {
+    const response = await kdpGoto(page, pricingUrl, {
+      waitUntil: 'networkidle',
+      timeout: 120_000,
+    }).catch(() => null)
+
+    if (response?.ok() && (await isPricingPageReady(page))) return true
+    await page.waitForTimeout(10_000)
   }
-
-  const submit = page.locator('input[type="submit"][value*="Save" i]').first()
-  if (await submit.isVisible({ timeout: 1500 }).catch(() => false)) {
-    await submit.click({ timeout: 15_000 })
-    await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
-    return
-  }
-
-  throw new KdpClientError('Could not find a Save button on the KDP pricing page.')
+  return false
 }
 
 async function isPricingPageReady(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
+  return page.evaluate(`(() => {
     if (document.title === 'Server Busy') return false
     return (
       !!document.getElementById('price-input-usd') ||
+      !!document.querySelector('input[name="data[print_book][list_price][USD][amount]"]') ||
+      !!document.querySelector('input[name="data[print_book][list_price][US][amount]"]') ||
       !!document.querySelector('input[name="data[digital][royalty_plan]"]') ||
       !!document.querySelector('input[name="data[digital][channels][amazon][US][price_vat_inclusive]"]') ||
       !!document.querySelector('input[name="data[digital][royalty_rate]-radio"]') ||
       !!document.querySelector('input[name="data[is_select]-check"]')
     )
-  })
+  })()`) as Promise<boolean>
 }
 
 async function openPricingPageWithRetry(
@@ -166,6 +168,27 @@ export async function updateBookPricingOnPage(
   }
 
   const fillResult = await fillPricingPage(page, format, changes)
+
+  if (fillResult.skipped.includes('listPriceUsd') && changes.listPriceUsd !== undefined) {
+    await page.evaluate(
+      `(price) => {
+        const el =
+          document.getElementById('price-input-usd') ||
+          document.querySelector('input[name="data[print_book][list_price][USD][amount]"]') ||
+          document.querySelector('input[name="data[print_book][list_price][US][amount]"]')
+        if (el) {
+          el.value = price
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+      }`,
+      changes.listPriceUsd,
+    )
+    if (!fillResult.filled.includes('listPriceUsd')) {
+      fillResult.filled.push('listPriceUsd')
+      fillResult.skipped = fillResult.skipped.filter((s) => s !== 'listPriceUsd')
+    }
+  }
 
   if (fillResult.skipped.length > 0 && fillResult.filled.length === 0) {
     throw new KdpClientError(

@@ -47,9 +47,22 @@
   }
 
   if (changes.inkAndPaper !== undefined) {
-    if (clickRadio('data[print_book][ink_and_paper]', changes.inkAndPaper)) {
-      filled.push('inkAndPaper')
-    } else skipped.push('inkAndPaper')
+    const aliases = {
+      premium_color: ['COLOR_WHITE', 'COLOR_COLOR', 'premium_color'],
+      standard_color: ['COLOR_WHITE', 'standard_color'],
+      black_and_white: ['BW_WHITE', 'BW_CREAM', 'black_and_white'],
+    }
+    const candidates =
+      aliases[changes.inkAndPaper] || [changes.inkAndPaper]
+    let ok = false
+    for (const val of candidates) {
+      if (clickRadio('data[print_book][ink_and_paper]', val)) {
+        ok = true
+        break
+      }
+    }
+    if (ok) filled.push('inkAndPaper')
+    else skipped.push('inkAndPaper')
   }
 
   if (changes.interiorHasBleed !== undefined) {

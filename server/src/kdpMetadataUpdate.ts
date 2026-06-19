@@ -141,6 +141,50 @@ async function fillDetailsPage(
   ) as Promise<FillResult>
 }
 
+async function ensureLanguageSelected(
+  page: Page,
+  format: KdpBookFormat,
+  language: string,
+): Promise<void> {
+  const selectId =
+    format === 'paperback'
+      ? 'data-print-book-language-native'
+      : format === 'hardcover'
+        ? 'data-hardcover-book-language-native'
+        : 'data-language-native'
+
+  const normalized = language.trim().toLowerCase()
+  const value =
+    normalized === 'english'
+      ? 'english'
+      : normalized === 'german'
+        ? 'german'
+        : normalized === 'french'
+          ? 'french'
+          : normalized === 'spanish'
+            ? 'spanish'
+            : normalized
+
+  await page.evaluate(
+    ({ id, wantedValue, wantedText }) => {
+      const el = document.getElementById(id) as HTMLSelectElement | null
+      if (!el) return
+      for (const opt of el.options) {
+        if (
+          opt.value.toLowerCase() === wantedValue ||
+          opt.text.trim().toLowerCase() === wantedText
+        ) {
+          el.value = opt.value
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+          return
+        }
+      }
+    },
+    { id: selectId, wantedValue: value, wantedText: normalized },
+  )
+  await page.waitForTimeout(500)
+}
+
 async function collectPageErrors(page: Page): Promise<string[]> {
   return page.evaluate(`(() => {
     const messages = new Set()
@@ -454,6 +498,9 @@ export async function updateBookMetadataOnPage(
   }
 
   const fillResult = await fillDetailsPage(page, format, changes)
+  if (changes.language) {
+    await ensureLanguageSelected(page, format, changes.language)
+  }
 
   if (fillResult.skipped.length > 0 && fillResult.filled.length === 0) {
     throw new KdpClientError(

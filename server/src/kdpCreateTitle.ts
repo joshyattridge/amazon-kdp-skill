@@ -71,47 +71,77 @@ export async function openSetupStep(
 }
 
 export async function setReleaseNow(page: Page): Promise<void> {
-  const releaseLink = page.getByRole('link', { name: /Release my book for sale now/i }).first()
-  if (await releaseLink.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await releaseLink.click({ timeout: 10_000 })
-    await page.waitForTimeout(1500)
-  }
-
   const clearDate = page.getByRole('link', { name: /Clear Date/i }).first()
   if (await clearDate.isVisible({ timeout: 2000 }).catch(() => false)) {
     await clearDate.click({ timeout: 10_000 })
     await page.waitForTimeout(1000)
   }
 
-  await page.evaluate(() => {
-    const releaseNow = document.querySelector(
-      'input[name="data[release_event_type]"]',
-    ) as HTMLInputElement | null
-    if (releaseNow) {
-      releaseNow.value = 'RELEASE_NOW'
-      releaseNow.dispatchEvent(new Event('change', { bubbles: true }))
-    }
-    for (const name of [
-      'data[print_book][future_release][enabled]',
-      'data[future_release][enabled]',
-    ]) {
-      const el = document.querySelector(`input[name="${name}"]`) as HTMLInputElement | null
-      if (el) {
-        el.value = 'false'
-        el.dispatchEvent(new Event('change', { bubbles: true }))
+  const future = new Date()
+  future.setDate(future.getDate() + 7)
+  const mm = String(future.getMonth() + 1).padStart(2, '0')
+  const dd = String(future.getDate()).padStart(2, '0')
+  const yyyy = future.getFullYear()
+  const isoDate = `${yyyy}-${mm}-${dd}`
+  const displayDate = `${mm}/${dd}/${yyyy}`
+
+  const scheduleLink = page.getByRole('link', { name: /Schedule a release date/i }).first()
+  if (await scheduleLink.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await scheduleLink.click({ timeout: 10_000 })
+    await page.waitForTimeout(1000)
+  }
+
+  await page.evaluate(
+    ({ isoDate, displayDate }) => {
+      for (const selector of [
+        'input[name="data[release_event_type]-radio"][value="FUTURE_RELEASE"]',
+        'input[name="data[release_event_type]-radio"][value="PREORDER"]',
+      ]) {
+        const radio = document.querySelector(selector) as HTMLInputElement | null
+        if (radio) {
+          radio.checked = true
+          radio.dispatchEvent(new Event('change', { bubbles: true }))
+          break
+        }
       }
-    }
-    const releaseDate = document.querySelector(
-      'input[name="data[print_book][future_release][release_date]"]',
-    ) as HTMLInputElement | null
-    if (releaseDate) {
-      releaseDate.value = ''
-      releaseDate.dispatchEvent(new Event('change', { bubbles: true }))
-    }
-    const picker = document.getElementById('release-date-picker-input') as HTMLInputElement | null
-    if (picker) {
-      picker.value = ''
-      picker.dispatchEvent(new Event('change', { bubbles: true }))
-    }
-  })
+      const releaseType = document.querySelector(
+        'input[name="data[release_event_type]"]',
+      ) as HTMLInputElement | null
+      if (releaseType) {
+        releaseType.value = 'FUTURE_RELEASE'
+        releaseType.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      for (const name of [
+        'data[print_book][future_release][enabled]',
+        'data[future_release][enabled]',
+      ]) {
+        const el = document.querySelector(`input[name="${name}"]`) as HTMLInputElement | null
+        if (el) {
+          el.value = 'true'
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+      }
+      const releaseDate = document.querySelector(
+        'input[name="data[print_book][future_release][release_date]"]',
+      ) as HTMLInputElement | null
+      if (releaseDate) {
+        releaseDate.value = isoDate
+        releaseDate.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      const picker = document.getElementById('release-date-picker-input') as HTMLInputElement | null
+      if (picker) {
+        picker.value = displayDate
+        picker.dispatchEvent(new Event('input', { bubbles: true }))
+        picker.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+    },
+    { isoDate, displayDate },
+  )
+
+  const picker = page.locator('#release-date-picker-input')
+  if (await picker.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await picker.fill(displayDate)
+    await picker.press('Tab').catch(() => {})
+    await page.waitForTimeout(500)
+  }
 }

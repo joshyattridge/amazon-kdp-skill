@@ -361,6 +361,8 @@ app.post('/api/kdp/categories/update', async (req, res) => {
 })
 
 app.post('/api/kdp/publish', async (req, res) => {
+  req.setTimeout(1_200_000)
+  res.setTimeout(1_200_000)
   try {
     const parsed = parsePublishBody(req.body)
     if ('error' in parsed) {

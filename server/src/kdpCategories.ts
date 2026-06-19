@@ -53,7 +53,19 @@ async function ensureAdultContentAnswered(page: Page, isAdult: boolean): Promise
   await page.waitForTimeout(1000)
 }
 
+async function dismissOpenPopovers(page: Page): Promise<void> {
+  await page.keyboard.press('Escape').catch(() => {})
+  await page.waitForTimeout(300)
+  await page.evaluate(() => {
+    for (const el of document.querySelectorAll('.a-popover, .a-modal-scroller')) {
+      ;(el as HTMLElement).click?.()
+    }
+  })
+  await page.waitForTimeout(500)
+}
+
 async function openCategoryModal(page: Page): Promise<void> {
+  await dismissOpenPopovers(page)
   const button = page.locator('#categories-modal-button')
   await button.waitFor({ state: 'attached', timeout: 15_000 })
   const enabled = await button.isEnabled().catch(() => false)
@@ -83,19 +95,29 @@ async function selectCategoryPathInModal(page: Page, path: string[]): Promise<st
 
     const matched = await select.evaluate((el, wanted) => {
       const selectEl = el as HTMLSelectElement
+      const wantedLower = String(wanted).toLowerCase()
+      let best: HTMLOptionElement | null = null
+      let bestScore = 0
       for (const opt of selectEl.options) {
-        if (opt.text.trim().toLowerCase() === wanted.toLowerCase()) {
-          selectEl.value = opt.value
-          selectEl.dispatchEvent(new Event('change', { bubbles: true }))
-          try {
-            const parsed = JSON.parse(opt.value) as { nodeId?: string }
-            return parsed.nodeId ?? opt.value
-          } catch {
-            return opt.value
-          }
+        const text = opt.text.trim().toLowerCase()
+        let score = 0
+        if (text === wantedLower) score = 3
+        else if (text.startsWith(wantedLower)) score = 2
+        else if (text.includes(wantedLower)) score = 1
+        if (score > bestScore) {
+          bestScore = score
+          best = opt
         }
       }
-      return null
+      if (!best || bestScore === 0) return null
+      selectEl.value = best.value
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }))
+      try {
+        const parsed = JSON.parse(best.value) as { nodeId?: string }
+        return parsed.nodeId ?? best.value
+      } catch {
+        return best.value
+      }
     }, label)
 
     if (!matched) {
@@ -176,6 +198,7 @@ export async function updateCategoriesOnPage(
   await ensureAdultContentAnswered(page, options.isAdultContent ?? false)
 
   const browseIds: string[] = []
+  const errors: string[] = []
   const pathCategories = categories.filter((c): c is { path: string[] } => 'path' in c)
   const idCategories = categories.filter((c): c is { browseNodeId: string } => 'browseNodeId' in c)
 
@@ -188,20 +211,25 @@ export async function updateCategoriesOnPage(
   }
 
   for (const cat of pathCategories) {
-    await openCategoryModal(page)
-    const nodeId = await selectCategoryPathInModal(page, cat.path)
-    if (nodeId) browseIds.push(nodeId)
-    await saveCategoryModal(page)
+    try {
+      await openCategoryModal(page)
+      const nodeId = await selectCategoryPathInModal(page, cat.path)
+      if (nodeId) browseIds.push(nodeId)
+      await saveCategoryModal(page)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      errors.push(msg)
+    }
   }
 
   const finalIds = await readBrowseNodeIds(page, format)
-  const errors = await collectPageErrors(page)
+  const pageErrors = await collectPageErrors(page)
 
   return {
     titleId,
     format,
     applied: finalIds.length,
     browseNodeIds: finalIds.length > 0 ? finalIds : browseIds,
-    errors,
+    errors: [...errors, ...pageErrors],
   }
 }

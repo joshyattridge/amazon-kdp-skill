@@ -11,6 +11,14 @@ import {
   type KdpBookMetadata,
   patchBookInCache,
 } from './metadataStore.js'
+import { clickKdpActionButton, dismissKdpOverlays } from './kdpUiHelpers.js'
+import {
+  approveManuscriptIfNeeded,
+  isSuccess,
+  readContentFileStatus,
+  saveContentPage,
+  waitForContentFileStatus,
+} from './kdpContentWait.js'
 
 const FILL_CONTENT_FN = fs.readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), '../browser/fillBookContent.js'),
@@ -75,22 +83,36 @@ function contentInputSelector(fileType: 'interior' | 'cover'): string {
 }
 
 async function clickSaveOnContentPage(page: Page): Promise<void> {
-  const patterns = [
-    /^save and continue$/i,
-    /^save as draft$/i,
-    /^save changes$/i,
-    /^save$/i,
-  ]
-  for (const pattern of patterns) {
-    const button = page.getByRole('button', { name: pattern }).first()
-    if (await button.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await button.click({ timeout: 15_000 })
-      await page.waitForLoadState('networkidle', { timeout: 120_000 }).catch(() => {})
-      return
-    }
-  }
-  throw new KdpClientError('Could not find Save button on content page.')
+  await saveContentPage(page)
 }
+
+async function uploadInteriorFile(page: Page, filePath: string): Promise<void> {
+  await revealContentUpload(page, 'interior')
+  const input = page.locator('#data-print-book-publisher-interior-file-upload-AjaxInput')
+  await input.setInputFiles(filePath)
+  await waitForUploadSuccess(page, path.basename(filePath))
+  await waitForContentFileStatus(page, 'manuscript', { timeoutMs: 300_000 }).catch(() => {})
+}
+
+async function uploadCoverFile(page: Page, filePath: string): Promise<void> {
+  await dismissKdpOverlays(page)
+  await revealContentUpload(page, 'cover')
+  const coverInput = page.locator(
+    '#data-print-book-publisher-cover-pdf-only-file-upload-AjaxInput, #data-print-book-publisher-cover-file-upload-AjaxInput',
+  ).first()
+  await coverInput.setInputFiles(filePath)
+  await waitForUploadSuccess(page, path.basename(filePath))
+  await page.waitForTimeout(5000)
+  await waitForContentFileStatus(page, 'cover', { timeoutMs: 180_000 }).catch(() => {})
+}
+
+function needsUpload(status: ContentFileStatus, kind: 'interior' | 'cover'): boolean {
+  return kind === 'interior'
+    ? !isSuccess(status.manuscriptStatus)
+    : !isSuccess(status.coverStatus)
+}
+
+type ContentFileStatus = Awaited<ReturnType<typeof readContentFileStatus>>
 
 async function revealContentUpload(page: Page, fileType: 'interior' | 'cover'): Promise<void> {
   if (fileType === 'interior') {
@@ -190,31 +212,44 @@ export async function completePrintContentOnPage(
   const settings = { ...spec.printSettings, assignFreeIsbn: true }
   await fillPrintContentOnPage(page, settings)
   await page.waitForTimeout(2000)
+  await saveContentPage(page).catch(() => {})
+
+  let status = await readContentFileStatus(page)
+  const interiorName = spec.interiorPath
+    ? path.basename(spec.interiorPath).replace(/\.[^.]+$/, '')
+    : ''
+  const coverName = spec.coverPath ? path.basename(spec.coverPath).replace(/\.[^.]+$/, '') : ''
+
+  if (spec.interiorPath && needsUpload(status, 'interior')) {
+    if (!fs.existsSync(spec.interiorPath)) {
+      throw new KdpClientError(`Interior file not found: ${spec.interiorPath}`)
+    }
+    try {
+      await uploadInteriorFile(page, spec.interiorPath)
+      status = await readContentFileStatus(page)
+      await saveContentPage(page).catch(() => {})
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : 'Interior upload failed.')
+    }
+  }
 
   const isbn = await assignFreeKdpIsbn(page)
   if (!isbn) errors.push('Could not assign free KDP ISBN.')
 
-  if (spec.interiorPath) {
-    if (!fs.existsSync(spec.interiorPath)) {
-      throw new KdpClientError(`Interior file not found: ${spec.interiorPath}`)
-    }
-    await revealContentUpload(page, 'interior')
-    await page.locator('#data-print-book-publisher-interior-file-upload-AjaxInput').setInputFiles(spec.interiorPath)
-    await waitForUploadSuccess(page, path.basename(spec.interiorPath))
-  }
-
-  if (spec.coverPath) {
+  if (spec.coverPath && needsUpload(status, 'cover')) {
     if (!fs.existsSync(spec.coverPath)) {
       throw new KdpClientError(`Cover file not found: ${spec.coverPath}`)
     }
-    await revealContentUpload(page, 'cover')
-    const coverInput = page.locator(
-      '#data-print-book-publisher-cover-pdf-only-file-upload-AjaxInput, #data-print-book-publisher-cover-file-upload-AjaxInput',
-    ).first()
-    await coverInput.setInputFiles(spec.coverPath)
-    await waitForUploadSuccess(page, path.basename(spec.coverPath))
+    try {
+      await uploadCoverFile(page, spec.coverPath)
+      status = await readContentFileStatus(page)
+      await saveContentPage(page).catch(() => {})
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : 'Cover upload failed.')
+    }
   }
 
+  await approveManuscriptIfNeeded(page)
   await clickSaveOnContentPage(page)
 
   const parsePage = await page.context().newPage()
@@ -226,12 +261,19 @@ export async function completePrintContentOnPage(
   }
   if (refreshed) await patchBookInCache(refreshed)
 
-  const interiorName = path.basename(spec.interiorPath).replace(/\.[^.]+$/, '')
-  const coverName = path.basename(spec.coverPath).replace(/\.[^.]+$/, '')
+  status = await readContentFileStatus(page)
 
   return {
-    interiorUploaded: Boolean(refreshed?.interiorFileName.includes(interiorName)),
-    coverUploaded: Boolean(refreshed?.coverFileName.includes(coverName)),
+    interiorUploaded: Boolean(
+      isSuccess(status.manuscriptStatus) ||
+        refreshed?.manuscriptStatus === 'SUCCESS' ||
+        (interiorName && refreshed?.interiorFileName.includes(interiorName)),
+    ),
+    coverUploaded: Boolean(
+      isSuccess(status.coverStatus) ||
+        refreshed?.coverStatus === 'SUCCESS' ||
+        (coverName && refreshed?.coverFileName.includes(coverName)),
+    ),
     isbn: refreshed?.isbn || isbn,
     errors,
   }

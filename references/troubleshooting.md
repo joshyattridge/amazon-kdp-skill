@@ -27,7 +27,21 @@ Only rows with editable title-setup links sync. Placeholder rows ("Create Kindle
 
 ## Save reported failure but change applied
 
-KDP shows warning banners (e.g. scheduled release) that are not save failures. Update flow verifies by **re-reading** metadata after save.
+KDP shows warning banners (e.g. scheduled release, language notice) that are not save failures. Update flow verifies by **re-reading** metadata after save.
+
+## Pricing page not available after content upload
+
+KDP blocks pricing until manuscript (and often cover) finish processing. The publish wizard polls up to **10 minutes** (`waitForPricingPageReady`). If it times out, open the title in KDP manually or re-run:
+
+```bash
+npm run publish:book -- output/YourBook.pricing-only.json --live
+```
+
+(JSON with `"titleId"`, `"pricing"` only, `"create": false`.)
+
+## Cover upload shows NOT_STARTED
+
+Ensure print settings (trim size, ink/paper type) are set before cover upload. The content flow now waits for hidden `publisher_cover[status]=SUCCESS` before continuing.
 
 ## Playwright / Chromium
 

@@ -21,6 +21,15 @@ Orchestrates the KDP title-setup flow in **one browser session**:
 - Live saves require `"dryRun": false` in the JSON **and** `--live` on the CLI.
 - **Never set `"publish": true`** unless the user explicitly asks to go live.
 
+## Full paperback upload from KDPUploader.xlsx
+
+```bash
+npm run uploader:to-publish -- /path/KDPUploader.xlsx --title "Book Title" --assets /path/pdfs
+npm run publish:book -- output/Book_Title.publish.json --live
+```
+
+The wizard waits for KDP to process manuscript/cover (up to 10 min) before opening pricing. It does **not** click Publish unless `"publish": true` in the JSON.
+
 ## Dry run (new paperback draft)
 
 ```bash
