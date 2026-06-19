@@ -50,4 +50,6 @@ curl -X POST http://localhost:3001/api/kdp/content/upload \
 | POST | `/api/kdp/content/upload` |
 | POST | `/api/kdp/content/upload/batch` |
 
+**Agents:** Upload interior and/or cover for **one title at a time**. Complete and verify each upload before the next title. Do not use the batch endpoint or parallel uploads.
+
 Upload processing can take 1–2 minutes. The flow waits for upload confirmation then saves.

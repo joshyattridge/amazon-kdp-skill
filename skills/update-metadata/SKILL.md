@@ -28,6 +28,10 @@ Set `"dryRun": false` to save.
 
 ## Batch from JSON
 
+**Agents:** Do not use batch mode for multiple books. Loop single-book updates instead (see main skill: Sequential operations).
+
+For manual CLI use only:
+
 ```bash
 npm run update:metadata -- scripts/update-kdp-metadata.example.json --dry-run
 npm run update:metadata -- scripts/update-kdp-metadata.example.json
@@ -71,4 +75,4 @@ The server spaces **every** KDP page load and API call by `KDP_REQUEST_DELAY_MS`
 | POST | `/api/kdp/metadata/update` |
 | POST | `/api/kdp/metadata/update/batch` |
 
-For 10+ books, prefer smaller batches or single-book updates to avoid HTTP timeouts and Amazon rate limits.
+**Agents:** Use `/api/kdp/metadata/update` once per book, sequentially. Do not use the batch endpoint for multi-book agent tasks — it times out and triggers Amazon rate limits.

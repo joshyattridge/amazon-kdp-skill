@@ -30,6 +30,22 @@ npm run publish:book -- output/Book_Title.publish.json --live
 
 The wizard waits for KDP to process manuscript/cover (up to 10 min) before opening pricing. It does **not** click Publish unless `"publish": true` in the JSON.
 
+## Multiple books
+
+Upload or update **one title per run**. Do not batch several books into one script or one API call.
+
+```bash
+# Book 1 — wait until this finishes and verify
+npm run uploader:to-publish -- /path/KDPUploader.xlsx --title "Book One" --assets /path/pdfs
+npm run publish:book -- output/Book_One.publish.json --live
+
+# Book 2 — only after book 1 succeeded
+npm run uploader:to-publish -- /path/KDPUploader.xlsx --title "Book Two" --assets /path/pdfs
+npm run publish:book -- output/Book_Two.publish.json --live
+```
+
+Each `publish:book --live` opens a headed browser session and may take several minutes. Running them in parallel causes timeouts and session conflicts.
+
 **Error recovery:** If KDP shows blockers (modals, release date, preview required, etc.), the server retries with automatic recoveries and saves what worked to `.kdp-session/recovery-learnings.json`. Check `recoveryLog` in the publish API response.
 
 ## Dry run (new paperback draft)

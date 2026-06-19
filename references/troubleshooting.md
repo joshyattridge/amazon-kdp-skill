@@ -14,12 +14,21 @@ Amazon rate-limits rapid page loads. Symptoms: page title "Server Busy", error `
 **Fix:**
 - Default spacing is 4s between every KDP request (`KDP_REQUEST_DELAY_MS=4000` in `.env`)
 - Increase to `6000` or `8000` if still blocked
-- Update books in smaller batches
+- Process **one book at a time** — wait for each operation to finish before the next
 - Wait 1–2 minutes if still blocked, then retry
 
 ## fetch failed on batch update
 
-Single HTTP request timed out for many books. Use single-book `/api/kdp/metadata/update` calls or smaller batches instead.
+Single HTTP request timed out for many books. **Do not batch.** Use `/api/kdp/metadata/update` (or pricing/content/publish) **once per book**, sequentially, and wait for each response before continuing.
+
+## Parallel or scripted multi-book runs
+
+Symptoms: browser closed mid-run, `Target page, context or browser has been closed`, partial uploads, timeouts.
+
+**Fix:**
+- Stop any batch script or parallel publish processes
+- Run one `publish:book --live` (or single API call) at a time
+- Verify each book in KDP before starting the next
 
 ## Bookshelf sync count lower than expected
 

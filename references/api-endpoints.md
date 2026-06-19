@@ -2,6 +2,8 @@
 
 Base URL: `http://localhost:3001` (configurable via `KDP_API_URL`)
 
+**Agents:** For multiple books, call single-book endpoints one at a time and wait for each response. Do not use `/batch` routes or parallel requests for write operations (see `SKILL.md` → Sequential operations).
+
 ## Health
 
 | GET | `/api/kdp/health` | `{ ok: true }` |

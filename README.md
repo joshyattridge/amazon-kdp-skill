@@ -49,6 +49,8 @@ Then ask your agent things like:
 
 Write operations default to **dry-run** — the agent verifies before pushing live changes.
 
+**Multiple books:** The agent processes one title at a time (separate publish/update calls, no batch scripts or parallel browser sessions). See `SKILL.md` → Sequential operations.
+
 See `skills/` for task-specific agent instructions and `references/` for API shapes and troubleshooting.
 
 ## How it works

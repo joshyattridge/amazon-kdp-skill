@@ -46,7 +46,7 @@ Set `"dryRun": false` to save.
 | POST | `/api/kdp/pricing/update` |
 | POST | `/api/kdp/pricing/update/batch` |
 
-Batch shape: `{ "updates": [{ "titleId", "format", "changes" }], "dryRun": false }`
+**Agents:** Update one title per request. Wait for each save to finish before starting the next book. Do not use the batch endpoint for multi-book agent work.
 
 ## Rate limiting
 

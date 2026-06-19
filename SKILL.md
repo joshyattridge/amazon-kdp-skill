@@ -20,6 +20,25 @@ Self-contained skill repo with a local Express + Playwright server. Amazon has *
 
 Session persists in `.kdp-session/` (gitignored).
 
+## Sequential operations (required)
+
+When the user asks for **multiple books or multiple write tasks**, process them **one at a time** — never in parallel and never in a single batch request.
+
+**Do:**
+- Complete one book (or one metadata/pricing/content update) fully before starting the next
+- Use single-book endpoints: `/api/kdp/metadata/update`, `/api/kdp/pricing/update`, `/api/kdp/content/upload`, `/api/kdp/publish` — one HTTP call per book
+- Run `npm run publish:book -- spec.json --live` once per title; generate a separate spec JSON per book if needed
+- Wait for each call to finish (publish can take several minutes) and verify the result before continuing
+- If a step fails, stop or fix that book before moving on — do not fire the rest of the queue blindly
+
+**Do not:**
+- Create batch scripts that loop inside one long-running process without user approval
+- Call batch API routes (`/batch` endpoints) for multiple titles in one request
+- Run multiple publish/upload commands in parallel or in background at the same time
+- Open more than one Playwright browser session for KDP writes at once
+
+This avoids HTTP timeouts, Amazon "Server Busy" rate limits, and browser/session conflicts. Batch endpoints exist for advanced use only; **agents should default to sequential single-book calls.**
+
 ## Sub-skills — read the matching file before acting
 
 | Task | Skill file |
@@ -101,7 +120,9 @@ Global rate limit (KDP_REQUEST_DELAY_MS between every request)
 | Archive title | `POST /api/kdp/titles/archive` |
 | Recovery learnings | `GET /api/kdp/recovery/learnings` |
 
-Always **dry-run one book** before batch writes. Never set `publish: true` without explicit user confirmation.
+Always **dry-run one book** before live writes on additional books. Never set `publish: true` without explicit user confirmation.
+
+Batch REST endpoints (`/batch`) are for manual/advanced use. **Agents must not use them for multi-book work** — call the single-book endpoint repeatedly, one title at a time, waiting for each to complete.
 
 ## Automatic error recovery
 
@@ -116,12 +137,13 @@ If recovery exhausts retries, read `errors` and `recoveryLog`, then fix the unde
 ## Rules for agents
 
 1. **Always check session** (`npm run status`) before sync/update. If `connected: false`, run login sub-skill first.
-2. **Never commit** `.kdp-session/` or downloaded `.xlsx` files.
-3. **Rate limiting**: the server spaces every KDP page load and API call by `KDP_REQUEST_DELAY_MS` (default 4s). Do not bypass this.
-4. **Metadata/pricing updates**: dry-run one book before batch.
-5. **Verify saves** by re-reading metadata from KDP (built into update flows).
-6. **Categories**: writable via browse node IDs or modal path picker (`POST /api/kdp/categories/update` or publish wizard).
-7. **Publish**: use `npm run publish:book` dry-run first; live publish requires `"publish": true` and user confirmation.
+2. **One operation at a time** for writes — see [Sequential operations](#sequential-operations-required). No batch scripts, no parallel publishes, no `/batch` API for multiple titles.
+3. **Never commit** `.kdp-session/` or downloaded `.xlsx` files.
+4. **Rate limiting**: the server spaces every KDP page load and API call by `KDP_REQUEST_DELAY_MS` (default 4s). Do not bypass this.
+5. **Metadata/pricing updates**: dry-run one book, then apply live changes **one book per request**.
+6. **Verify saves** by re-reading metadata from KDP (built into update flows).
+7. **Categories**: writable via browse node IDs or modal path picker (`POST /api/kdp/categories/update` or publish wizard).
+8. **Publish**: use `npm run publish:book` dry-run first; live publish requires `"publish": true` and user confirmation. **One book per `publish:book` invocation.**
 
 ## References
 
