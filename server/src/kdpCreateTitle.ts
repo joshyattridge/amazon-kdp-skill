@@ -4,6 +4,7 @@ import { kdpGoto } from './kdpHttp.js'
 import { setupPageUrl } from './kdpMetadata.js'
 import type { KdpBookFormat } from './metadataStore.js'
 import { bypassServerBusy, titleIdFromUrl } from './kdpWizard.js'
+import { dismissKdpOverlays } from './kdpUiHelpers.js'
 
 const CREATE_URL = 'https://kdp.amazon.com/en_US/create'
 
@@ -71,23 +72,34 @@ export async function openSetupStep(
 }
 
 export async function setReleaseNow(page: Page): Promise<void> {
-  for (const clearDate of await page.getByRole('link', { name: /Clear Date/i }).all()) {
-    if (await clearDate.isVisible({ timeout: 500 }).catch(() => false)) {
-      await clearDate.click({ timeout: 10_000 }).catch(() => {})
-      await page.waitForTimeout(800)
-    }
-  }
+  await dismissKdpOverlays(page)
 
-  const releaseNow = page.locator('a').filter({ hasText: /Release my book for sale now/i }).first()
-  if (await releaseNow.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await releaseNow.click({ timeout: 10_000 })
+  await page.evaluate(`(() => {
+    for (const a of document.querySelectorAll('a')) {
+      if (/clear date/i.test(a.textContent || '')) a.click()
+    }
+  })()`)
+  await page.waitForTimeout(800)
+
+  const clicked = (await page.evaluate(`(() => {
+    for (const label of [/release my book for sale now/i, /schedule my book'?s? release/i]) {
+      for (const a of document.querySelectorAll('a')) {
+        const text = (a.textContent || '').replace(/\\s+/g, ' ').trim()
+        if (label.test(text)) {
+          a.click()
+          return text
+        }
+      }
+    }
+    return null
+  })()`)) as string | null
+
+  if (clicked && /release my book for sale now/i.test(clicked)) {
     await page.waitForTimeout(1500)
     return
   }
 
-  const scheduleLink = page.locator('a').filter({ hasText: /Schedule my book'?s? release/i }).first()
-  if (await scheduleLink.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await scheduleLink.click({ timeout: 10_000 })
+  if (clicked) {
     await page.waitForTimeout(1500)
   }
 
@@ -99,25 +111,29 @@ export async function setReleaseNow(page: Page): Promise<void> {
 
   const picker = page.locator('#release-date-picker-input')
   if (await picker.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await picker.click({ timeout: 10_000 })
+    await page.evaluate(`(() => {
+      const input = document.getElementById('release-date-picker-input')
+      if (input) input.click()
+    })()`)
     await page.waitForTimeout(1000)
 
     if (targetMonth !== now.getMonth()) {
-      const nextBtn = page.locator('.ui-datepicker-next').first()
-      if (await nextBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await nextBtn.click()
-        await page.waitForTimeout(500)
-      }
+      await page.evaluate(`(() => {
+        const next = document.querySelector('.ui-datepicker-next')
+        if (next) next.click()
+      })()`)
+      await page.waitForTimeout(500)
     }
 
-    const dayLink = page
-      .locator('.ui-datepicker-calendar td:not(.ui-datepicker-unselectable) a.ui-state-default')
-      .filter({ hasText: new RegExp(`^${targetDay}$`) })
-      .first()
-    if (await dayLink.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await dayLink.click({ timeout: 10_000 })
-      await page.waitForTimeout(1500)
-    }
+    await page.evaluate(`((day) => {
+      for (const a of document.querySelectorAll('.ui-datepicker-calendar td:not(.ui-datepicker-unselectable) a.ui-state-default')) {
+        if ((a.textContent || '').trim() === day) {
+          a.click()
+          return
+        }
+      }
+    })(${JSON.stringify(targetDay)})`)
+    await page.waitForTimeout(1500)
   }
 }
 

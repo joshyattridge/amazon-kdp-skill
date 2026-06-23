@@ -75,6 +75,8 @@ async function dismissOpenPopovers(page: Page): Promise<void> {
 
 async function openCategoryModal(page: Page): Promise<void> {
   await dismissOpenPopovers(page)
+  const { dismissKdpOverlays } = await import('./kdpUiHelpers.js')
+  await dismissKdpOverlays(page)
   const button = page.locator('#categories-modal-button')
   await button.waitFor({ state: 'attached', timeout: 15_000 })
   const enabled = await button.isEnabled().catch(() => false)
@@ -83,7 +85,15 @@ async function openCategoryModal(page: Page): Promise<void> {
       'Category picker is disabled. Fill title, author, language, and adult-content question first.',
     )
   }
-  await button.click({ timeout: 15_000 })
+  const clicked = await page.evaluate(`(() => {
+    const btn = document.getElementById('categories-modal-button')
+    if (!btn) return false
+    btn.click()
+    return true
+  })()`)
+  if (!clicked) {
+    await button.click({ timeout: 15_000, force: true })
+  }
   await page
     .locator('[role=dialog]:visible')
     .filter({ has: page.locator('select').first() })
@@ -102,7 +112,21 @@ async function selectCategoryPathInModal(page: Page, path: string[]): Promise<st
     const select = dialog.locator('select').nth(level)
     if ((await select.count()) === 0) break
 
-    const matched = await select.evaluate((el, wanted) => {
+    const aliasesFor = (wanted: string): string[] => {
+      const w = wanted.toLowerCase()
+      const out = [wanted]
+      if (/sports & outdoor activities/i.test(w)) out.push('Sports & Outdoors', 'Sports')
+      if (/action & adventure/i.test(w)) out.push('Action & Adventure')
+      if (/fairy tales, folk tales & myths/i.test(w)) out.push('Fairy Tales, Folk Tales & Myths')
+      if (/^money$/i.test(w)) out.push('Education & Reference', 'Business & Money')
+      if (/^finance$/i.test(w)) out.push('Money & Saving', 'Personal Finance')
+      if (/^concepts$/i.test(w)) out.push('Basic Concepts', 'Concepts')
+      return out
+    }
+
+    let matched: string | null = null
+    for (const attempt of aliasesFor(label)) {
+      matched = await select.evaluate((el, wanted) => {
       const selectEl = el as HTMLSelectElement
       const wantedLower = String(wanted).toLowerCase()
       let best: HTMLOptionElement | null = null
@@ -110,9 +134,14 @@ async function selectCategoryPathInModal(page: Page, path: string[]): Promise<st
       for (const opt of selectEl.options) {
         const text = opt.text.trim().toLowerCase()
         let score = 0
-        if (text === wantedLower) score = 3
-        else if (text.startsWith(wantedLower)) score = 2
-        else if (text.includes(wantedLower)) score = 1
+        if (text === wantedLower) score = 4
+        else if (text.startsWith(wantedLower)) score = 3
+        else if (text.includes(wantedLower)) score = 2
+        else if (wantedLower.includes(text) && text.length > 3) score = 1
+        else {
+          const firstWord = wantedLower.split(/\s+/)[0]
+          if (firstWord && firstWord.length > 3 && text.includes(firstWord)) score = 1
+        }
         if (score > bestScore) {
           bestScore = score
           best = opt
@@ -127,7 +156,9 @@ async function selectCategoryPathInModal(page: Page, path: string[]): Promise<st
       } catch {
         return best.value
       }
-    }, label)
+      }, attempt)
+      if (matched) break
+    }
 
     if (!matched) {
       throw new KdpClientError(`Category segment not found in picker: "${label}"`)
@@ -225,6 +256,9 @@ export async function updateCategoriesOnPage(
 
   for (const cat of pathCategories) {
     try {
+      await dismissOpenPopovers(page)
+      const { dismissKdpOverlays } = await import('./kdpUiHelpers.js')
+      await dismissKdpOverlays(page)
       await openCategoryModal(page)
       const nodeId = await selectCategoryPathInModal(page, cat.path)
       if (nodeId) browseIds.push(nodeId)
@@ -232,6 +266,9 @@ export async function updateCategoriesOnPage(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       errors.push(msg)
+      await dismissOpenPopovers(page)
+      const { dismissKdpOverlays } = await import('./kdpUiHelpers.js')
+      await dismissKdpOverlays(page)
     }
   }
 

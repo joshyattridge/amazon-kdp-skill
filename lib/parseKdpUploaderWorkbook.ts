@@ -2,6 +2,7 @@ import XLSX from 'xlsx'
 import type { PublishBookRequest } from '../server/src/kdpPublish.js'
 import type { KdpPrintContentSettings } from '../server/src/kdpContentUpdate.js'
 import type { KdpBookFormat } from '../server/src/metadataStore.js'
+import { sanitizeDescriptionHtml } from '../server/src/kdpMetadataUpdate.js'
 
 export type KdpUploaderFormat = 'paperback' | 'hardcover' | 'ebook'
 
@@ -161,7 +162,9 @@ export function kdpUploaderRowToPublishSpec(
     details: {
       title: String(row.Title ?? '').trim(),
       subtitle: String(row.Subtitle ?? '').trim() || undefined,
-      descriptionHtml: String(row.Description ?? '').trim() || undefined,
+      descriptionHtml: String(row.Description ?? '').trim()
+        ? sanitizeDescriptionHtml(String(row.Description ?? '').trim())
+        : undefined,
       language: String(row.Language ?? 'English').trim(),
       primaryAuthor: {
         firstName: String(row['Author first name'] ?? '').trim(),

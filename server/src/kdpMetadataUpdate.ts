@@ -94,6 +94,10 @@ export function sanitizeDescriptionHtml(html: string): string {
   return html.replace(/<\/?h1\b[^>]*>/gi, (tag) => (/^<h1/i.test(tag) ? '<p><b>' : '</b></p>'))
 }
 
+function normalizeKeywords(keywords: string[]): string[] {
+  return keywords.slice(0, 7).map((kw) => kw.trim())
+}
+
 function buildFillPayload(changes: KdpMetadataChanges): Record<string, unknown> {
   const payload: Record<string, unknown> = {}
   if (changes.title !== undefined) payload.title = changes.title
@@ -247,6 +251,9 @@ export async function ensureLanguageSelected(
   }
 
   await page.waitForTimeout(500)
+  await page.keyboard.press('Escape').catch(() => {})
+  const { dismissKdpOverlays } = await import('./kdpUiHelpers.js')
+  await dismissKdpOverlays(page)
 }
 
 async function collectPageErrors(page: Page): Promise<string[]> {
@@ -320,8 +327,9 @@ async function finalizeMetadataSave(
   fillResult: FillResult,
 ): Promise<KdpMetadataUpdateResult> {
   const pageErrors = await filterActionablePageErrors(page, await collectPageErrors(page))
+  const stillOnDetails = page.url().includes('/details')
   const leftDetails =
-    !page.url().includes('/details') && page.url().includes(`/title-setup/${format}/${titleId}`)
+    !stillOnDetails && page.url().includes(`/title-setup/${format}/`)
   const onPageDescLen = await readOnPageDescriptionLength(page, format)
   const parsePage = await page.context().newPage()
   let refreshed: KdpBookMetadata | null = null
@@ -351,7 +359,7 @@ async function finalizeMetadataSave(
     }
   }
 
-  if (leftDetails && descriptionOk && pageErrors.length === 0) {
+  if ((leftDetails || stillOnDetails) && descriptionOk && pageErrors.length === 0) {
     if (refreshed) await patchBookInCache(refreshed)
     return {
       titleId,

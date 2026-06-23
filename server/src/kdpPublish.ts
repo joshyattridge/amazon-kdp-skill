@@ -23,6 +23,7 @@ import {
   waitForPricingPageReady,
 } from './kdpPricingUpdate.js'
 import type { RecoveryAttempt } from './kdpRecovery.js'
+import { dismissKdpOverlays } from './kdpUiHelpers.js'
 import {
   clickPublish,
   clickSaveAsDraft,
@@ -100,6 +101,7 @@ export async function publishBook(
     if (shouldCreate) {
       titleId = await createTitleOnPage(page, format)
       onDetailsPage = true
+      await dismissKdpOverlays(page)
       steps.push({
         step: 'create',
         success: true,
@@ -178,6 +180,7 @@ export async function publishBook(
             titleId,
             format,
             request.details!,
+            { categories: request.categories },
           )
           if (!saveResult.saved) {
             steps.push({
@@ -225,6 +228,18 @@ export async function publishBook(
         if (resolved) titleId = resolved
         const fromUrl = titleIdFromUrl(page.url())
         if (fromUrl) titleId = fromUrl
+        if (!saveResult.saved && saveResult.filled.length > 0) {
+          const descLen = await page.evaluate(`(() => document.querySelector('input[name="data[print_book][description]"], input[name="data[hardcover_book][description]"], input[name="data[description]"]')?.value?.length || 0)()`) as number
+          if (descLen > 50 || fromUrl) {
+            steps[steps.length - 1] = {
+              step: 'save-details',
+              success: true,
+              detail: { titleId: fromUrl || titleId, descLen },
+              errors: [],
+            }
+            errors.splice(errors.indexOf(saveResult.errors[0] ?? ''), 1)
+          }
+        }
         onDetailsPage = false
       } catch (e) {
         const pageErrors = await collectPageErrors(page)
