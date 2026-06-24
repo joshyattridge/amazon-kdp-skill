@@ -15,8 +15,8 @@ This skill fills that gap. A local Playwright server drives KDP the same way you
 - Download and parse royalty reports
 - Sync your full catalog — titles, keywords, categories, pricing, ASINs
 - Audit metadata for SEO gaps (missing keywords, short descriptions, etc.)
-- Update listings, prices, KDP Select, and content files
-- Run the full publish wizard from draft to live
+- Update listings, prices, KDP Select, and content files (Buggy still in development)
+- Run the full publish wizard from draft to live (Buggy still in development)
 
 Everything runs on your machine. Session cookies stay in `.kdp-session/` and are never sent anywhere else.
 
@@ -70,6 +70,8 @@ You  →  Agent (Cursor / Claude)  →  npm scripts / REST API  →  Playwright 
 ## Contributing
 
 The goal is to cover **every KDP workflow an author or publisher would automate** — reports, metadata, pricing, content, categories, publishing, account management, and anything else KDP exposes through its UI.
+
+KDP exposes a large surface area — dozens of pages, forms, and workflows — and there are many endpoints and sub-skills still to build. This project can't reach full coverage alone; **community contributions are essential**. If you use a KDP flow that isn't supported yet, please help fill the gap.
 
 If a use case is missing or broken, please open an issue or submit a PR. Useful contributions include:
 
